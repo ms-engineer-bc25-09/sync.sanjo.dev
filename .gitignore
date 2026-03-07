@@ -1,0 +1,32 @@
+# Node modules
+node_modules/
+
+# environment variables
+.env
+.env.local
+.env.*.local
+
+# logs
+logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# build
+dist/
+build/
+
+# VSCode
+.vscode/
+
+# Next.js
+.next/
+
+# Supabase
+.supabase/
+
+# temporary
+tmp/
+temp/
