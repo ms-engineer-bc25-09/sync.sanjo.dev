@@ -1,32 +1,89 @@
-# Node modules
+############################
+# dependencies
+############################
 node_modules/
 
+############################
 # environment variables
+############################
 .env
 .env.local
-.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 
+############################
 # logs
+############################
 logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# OS
+############################
+# build output
+############################
+dist/
+build/
+out/
+
+############################
+# Next.js
+############################
+.next/
+.next/cache/
+
+############################
+# Supabase
+############################
+.supabase/
+.supabase/.temp/
+supabase/.temp/
+
+############################
+# database dumps
+############################
+*.sql
+*.dump
+
+############################
+# OS files
+############################
 .DS_Store
 Thumbs.db
 
-# build
-dist/
-build/
-
-# VSCode
+############################
+# IDE / Editor
+############################
 .vscode/
+.idea/
+*.swp
+*.swo
 
-# Next.js
-.next/
-
-# Supabase
-.supabase/
-
-# temporary
+############################
+# temporary files
+############################
 tmp/
 temp/
+.cache/
+
+############################
+# coverage / test
+############################
+coverage/
+.nyc_output/
+
+############################
+# local uploads / storage
+############################
+uploads/
+storage/
+
+############################
+# misc
+############################
+*.pid
+*.seed
+*.tgz
