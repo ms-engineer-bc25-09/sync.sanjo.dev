@@ -1,0 +1,10 @@
+# sync-sanjo/app/.dockerignore
+# Docker build に不要なものを除外する
+# これを入れると Mac / Windows の差分事故を減らしやすい
+
+node_modules
+dist
+npm-debug.log
+.git
+.DS_Store
+Thumbs.db
