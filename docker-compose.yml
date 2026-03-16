@@ -1,0 +1,61 @@
+# sync-sanjo/docker-compose.yml
+# Docker Compose設定
+# 役割:
+# - app (Express) を開発用コンテナで起動する
+# - ngrok は必要なときだけ profile=tools で起動する
+
+name: sync-sanjo
+
+services:
+  app:
+    build:
+      context: ./app
+      target: development
+    container_name: sync_sanjo_app
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    volumes:
+      # ローカルの app フォルダをコンテナの /app にマウント
+      - ./app:/app
+      # node_modules は名前付きボリュームにして
+      # Mac / Windows で依存関係の差分事故を減らす
+      - app_node_modules:/app/node_modules
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+    command: npm run dev
+    restart: unless-stopped
+    healthcheck:
+      # wget や curl に依存しないように Node 自身で疎通確認する
+      # これなら OS 差分で失敗しにくい
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: sync_sanjo_ngrok
+    profiles:
+      - tools
+    depends_on:
+      - app
+    command: http app:3000
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+    restart: unless-stopped
+
+volumes:
+  app_node_modules:
