@@ -16,7 +16,7 @@ docker compose up --build
 または
 
 ```
-docker compose up-d
+docker compose up -d
 ```
 
 起動後、以下のURLで動作確認できます。
