@@ -1,4 +1,5 @@
 function handleLine_(data) {
+  Logger.log("handleLine_ called: " + JSON.stringify(data));
   try {
     const events = data.events || [];
 
@@ -117,7 +118,7 @@ function writeToSupabase_(now, lineUserId, parsed) {
     material: parsed.material || null,
     size_text: parsed.size_thickness || parsed.size_text || null,
     quantity: Number.isNaN(quantityValue) ? null : quantityValue,
-    due_date: parsed.desired_due_date || parsed.due_date || null,
+    due_date: null,
     note: parsed.notes || null,
     line_user_id: lineUserId || null,
 
