@@ -86,16 +86,6 @@ function handleLine_(data) {
         // 7. 案件台帳へ保存
         writeToLedger_(now, formatted);
 
-<<<<<<< HEAD
-        // 8. Supabaseへ保存
-        writeToSupabase_(now, lineUserId, formatted);
-
-        // 9. LINE返信
-        if (event.replyToken) {
-          const projectName = formatted.project_name || '-';
-          const material = formatted.material || '-';
-          const quantity = formatted.quantity || '-';
-=======
         // 8. Supabaseへ保存（デバッグ付き）
         let supabaseResult = 'ok';
 
@@ -111,7 +101,6 @@ function handleLine_(data) {
           const material = formatted.material || '-';
           const quantity = formatted.quantity || '-';
           const projectName = formatted.project_name || '-';
->>>>>>> 9afcb1e (fix: LINEルート整形・バリデーション追加)
 
           replyLineMessage_(event.replyToken, [
             {
@@ -220,11 +209,8 @@ function normalizeMaterial_(material) {
   if (!material) return '';
 
   const value = String(material).trim();
-<<<<<<< HEAD
-=======
 
   // 空白やハイフンを軽く吸収
->>>>>>> 9afcb1e (fix: LINEルート整形・バリデーション追加)
   const compact = value.replace(/[\s\-－_]/g, '').toUpperCase();
 
   if (/^SUS\d+$/.test(compact)) {
@@ -246,28 +232,6 @@ function writeToInternalLog_(now, lineUserId, text, parsed) {
   );
 
   sheet.appendRow([
-<<<<<<< HEAD
-    '',
-    formatDate_(now),
-    'LINE',
-    '未対応',
-    parsed.customer_name || '',
-    parsed.contact_name || '',
-    parsed.project_name || '',
-    parsed.drawing_number || '',
-    parsed.material || '',
-    parsed.size_thickness || parsed.size_text || '',
-    parsed.quantity || '',
-    parsed.desired_due_date || '',
-    parsed.notes || '',
-    text,
-    lineUserId,
-    JSON.stringify(parsed),
-    '',
-    '',
-    '',
-    formatDate_(now),
-=======
     '', // ID
     formatDate_(now), // 作成日時
     'LINE', // 受付経路
@@ -288,7 +252,6 @@ function writeToInternalLog_(now, lineUserId, text, parsed) {
     '', // 過去単価
     '', // 今回提示単価
     formatDate_(now), // スプレッドシート更新日時
->>>>>>> 9afcb1e (fix: LINEルート整形・バリデーション追加)
   ]);
 }
 
