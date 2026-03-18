@@ -1,0 +1,19 @@
+# 依存関係（整形不要）
+node_modules
+
+# ビルド成果物
+dist
+build
+
+# 環境ファイル
+.env
+.env.*
+
+# ログ
+*.log
+
+# clasp / GAS関連の生成物（必要に応じて）
+.clasp.json
+
+# その他（必要に応じて追加）
+coverage
