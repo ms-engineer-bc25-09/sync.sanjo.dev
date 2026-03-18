@@ -15,6 +15,7 @@ clasp clone <スクリプトID>
 ```
 
 スクリプトIDはチームのNotionを確認してください。
+参照先Notion：https://www.notion.so/ms-engineer/Clasp-ID-3268f7a0362880039fc8d60106855a7d?source=copy_link
 
 ## GASエディタへの反映（push）
 
