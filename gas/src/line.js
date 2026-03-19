@@ -144,7 +144,7 @@ function formatProjectData_(data, rawText) {
   return {
     customer_name: data.customer_name || '不明',
     contact_name: data.contact_name || '',
-    project_name: data.project_name || '（案件名未設定）',
+    project_name: data.project_name || extractProjectName_(rawText),
     drawing_number: data.drawing_number || '',
     material: data.material || '不明',
     size_thickness: data.size_thickness || data.size_text || '',
@@ -326,4 +326,26 @@ function replyLineMessage_(replyToken, messages) {
 
   Logger.log('LINE reply status: ' + response.getResponseCode());
   Logger.log('LINE reply response: ' + response.getContentText());
+}
+
+function extractProjectName_(text) {
+  if (!text) return '（案件名未設定）';
+
+  const patterns = [
+    /(ブラケット)/,
+    /(プレート)/,
+    /(シャフト)/,
+    /(ケース)/,
+    /(カバー)/,
+    /(ネジ)/,
+    /(パイプ)/,
+    /(フランジ)/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+
+  return text.length > 20 ? text.slice(0, 20) : text;
 }
