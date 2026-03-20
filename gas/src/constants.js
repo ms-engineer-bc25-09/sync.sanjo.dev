@@ -54,7 +54,7 @@ const COLUMNS = {
     CONTACT_NAME: '担当者名',
     EMAIL: 'メールアドレス',
     PHONE: '電話番号',
-    INQUIRY: '案件内容',
+    INQUIRY: '案件名',
     DUE_DATE: '希望納期',
     MATERIAL: '材質',
     SIZE_THICKNESS: 'サイズ・板厚',
