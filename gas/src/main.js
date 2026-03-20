@@ -169,13 +169,27 @@ function handleLineImageMessage_(event) {
     'size(bytes): ' +
     (imageData.blob ? imageData.blob.getBytes().length : 0);
 
-  saveLineGeminiResultToSheets_({
+  const ledgerRow = buildLedgerRowFromGeminiResult_({
     geminiResult: geminiResult,
+    rawText: rawText,
     source: 'LINE',
     status: '未対応',
+    drawingUrl: '',
+  });
+  const internalLogRow = buildInternalLogRowFromGeminiResult_({
+    geminiResult: geminiResult,
+    ledgerRow: ledgerRow,
     rawText: rawText,
     lineUserId: lineUserId,
-    drawingUrl: '',
+  });
+
+  appendInternalLogRow_(internalLogRow);
+  appendLedgerRow_(ledgerRow);
+
+  saveProjectToSupabase_({
+    geminiResult: geminiResult,
+    ledgerRow: ledgerRow,
+    lineUserId: lineUserId,
   });
 
   if (replyToken) {
@@ -219,6 +233,182 @@ function handleLineImageMessage_(event) {
 function testGemini() {
   const result = callGemini_('テストです。SUS304で10個、来週まで');
   Logger.log('testGemini result: ' + JSON.stringify(result));
+}
+
+function buildLedgerRowFromGeminiResult_(options) {
+  const result = options.geminiResult || {};
+  const rawText = (options.rawText || '').trim();
+  const projectName = (result.project_name || '').trim();
+  const drawingNumber = (result.drawing_number || '').trim();
+  const inquiry = projectName || drawingNumber || rawText || '画像受信案件';
+
+  let rawJson = '';
+
+  try {
+    rawJson = JSON.stringify(result || {});
+  } catch (error) {
+    rawJson = '';
+  }
+
+  return {
+    receivedAt: new Date(),
+    status: options.status || '',
+    source: options.source || '',
+    customerName: result.customer_name || '',
+    contactName: result.contact_name || '',
+    email: '',
+    phone: '',
+    inquiry: inquiry,
+    dueDate: result.desired_due_date || '',
+    material: result.material || '',
+    sizeThickness: result.size_thickness || '',
+    quantity: result.quantity || '',
+    notes: result.notes || '',
+    drawingUrl: options.drawingUrl || '',
+    rawJson: rawJson,
+  };
+}
+
+function buildInternalLogRowFromGeminiResult_(options) {
+  const result = options.geminiResult || {};
+  const ledgerRow = options.ledgerRow || {};
+  const now = ledgerRow.receivedAt || new Date();
+
+  return {
+    id: '',
+    createdAt: now,
+    source: ledgerRow.source || '',
+    status: ledgerRow.status || '',
+    customerName: ledgerRow.customerName || '',
+    contactName: ledgerRow.contactName || '',
+    projectName: result.project_name || '',
+    drawingNumber: result.drawing_number || '',
+    material: ledgerRow.material || '',
+    size: ledgerRow.sizeThickness || '',
+    quantity: ledgerRow.quantity || '',
+    dueDate: ledgerRow.dueDate || '',
+    notes: ledgerRow.notes || '',
+    rawText: options.rawText || '',
+    lineUserId: options.lineUserId || '',
+    aiExtractedJson: ledgerRow.rawJson || '',
+    similarCase: '',
+    pastUnitPrice: '',
+    suggestedPrice: '',
+    spreadsheetUpdatedAt: now,
+  };
+}
+
+function saveProjectToSupabase_(options) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    Logger.log('saveProjectToSupabase_ skipped: missing Supabase config');
+    return;
+  }
+
+  const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/projects';
+  const payload = buildSupabaseProjectPayload_(options);
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+        Prefer: 'return=minimal',
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    });
+
+    const statusCode = response.getResponseCode();
+    const body = response.getContentText();
+
+    Logger.log('saveProjectToSupabase_ status: ' + statusCode);
+
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log('saveProjectToSupabase_ response: ' + body);
+    }
+  } catch (error) {
+    Logger.log('saveProjectToSupabase_ error: ' + error.message);
+    Logger.log('saveProjectToSupabase_ error stack: ' + error.stack);
+  }
+}
+
+function buildSupabaseProjectPayload_(options) {
+  const result = options.geminiResult || {};
+  const ledgerRow = options.ledgerRow || {};
+
+  return {
+    source_type: normalizeSupabaseSourceType_(ledgerRow.source),
+    received_at: toIsoStringOrNull_(ledgerRow.receivedAt),
+    status: normalizeSupabaseStatus_(ledgerRow.status),
+    customer_name: ledgerRow.customerName || '',
+    contact_name: ledgerRow.contactName || '',
+    project_name: result.project_name || '',
+    drawing_number: result.drawing_number || '',
+    material: ledgerRow.material || '',
+    size_text: ledgerRow.sizeThickness || '',
+    quantity: parseSupabaseQuantity_(ledgerRow.quantity),
+    due_date: parseSupabaseDueDate_(ledgerRow.dueDate),
+    current_response_note: '',
+    note: ledgerRow.notes || '',
+    ai_summary: '',
+    line_user_id: options.lineUserId || '',
+    spreadsheet_row_no: null,
+  };
+}
+
+function normalizeSupabaseSourceType_(source) {
+  const value = (source || '').toLowerCase();
+
+  if (value === 'line') return 'line';
+  if (value === 'tally') return 'tally';
+  if (value === 'phone') return 'phone';
+  if (value === 'fax') return 'fax';
+  if (value === 'email') return 'email';
+  if (value === 'talk') return 'talk';
+
+  return 'line';
+}
+
+function normalizeSupabaseStatus_(status) {
+  if (status === '未対応') return 'received';
+  return 'received';
+}
+
+function toIsoStringOrNull_(value) {
+  if (!value) return null;
+
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    if (isNaN(value.getTime())) return null;
+    return value.toISOString();
+  }
+
+  return null;
+}
+
+function parseSupabaseQuantity_(value) {
+  const text = (value || '').toString();
+  const match = text.match(/\d+/);
+
+  if (!match) return null;
+
+  const quantity = parseInt(match[0], 10);
+  return isNaN(quantity) ? null : quantity;
+}
+
+function parseSupabaseDueDate_(value) {
+  const text = (value || '').trim();
+
+  if (!text) return null;
+
+  const normalized = text.replace(/\//g, '-');
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
 }
 
 function testSaveLineGeminiResultToSheets() {
