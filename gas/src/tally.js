@@ -18,6 +18,20 @@ function handleTally_(data) {
   answers.quantity = answers.quantity || parsed.quantity || '';
   answers.notes = answers.notes || parsed.notes || '';
 
+  let drawingUrl = answers.fileUrl || '';
+
+  if (answers.fileUrl) {
+    try {
+      drawingUrl = uploadTallyFileToSupabase_(answers.fileUrl, {
+        receivedAt: now,
+      });
+      Logger.log('handleTally_ uploaded file to supabase: ' + drawingUrl);
+    } catch (error) {
+      Logger.log('handleTally_ file upload error: ' + error.message);
+      Logger.log('handleTally_ file upload error stack: ' + error.stack);
+    }
+  }
+
   Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
   Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
 
@@ -60,7 +74,7 @@ function handleTally_(data) {
     sizeThickness: answers.sizeThickness,
     quantity: answers.quantity,
     notes: answers.notes,
-    drawingUrl: answers.fileUrl,
+    drawingUrl: drawingUrl,
     rawJson: rawJson,
   });
 
@@ -128,7 +142,7 @@ function getFieldValueByLabel_(fields, label) {
 
   const field = fields.find(function (item) {
     const fieldLabel = item?.label || item?.title || '';
-    return fieldLabel === label;
+    return fieldLabel === label || fieldLabel.includes(label);
   });
 
   return field ? extractFieldValue_(field) : '';
@@ -208,10 +222,17 @@ function normalizeTallyAnswers_(payload) {
     else if (label.includes("ご相談内容")) result.inquiry = value;
     else if (label.includes("希望納期")) result.dueDate = value;
     else if (label.includes("材質")) result.material = value;
-    else if (label.includes("サイズ・板厚")) result.sizeThickness = value;
+    else if (label.includes("サイズ・板厚") || label.includes("サイズ板厚")) {
+      result.sizeThickness = value;
+    }
     else if (label.includes("数量")) result.quantity = value;
     else if (label.includes("補足事項")) result.notes = value;
-    else if (label.includes("図面・参考資料")) result.fileUrl = value;
+    else if (
+      label.includes("図面・参考資料") ||
+      label.includes("図面参考資料")
+    ) {
+      result.fileUrl = value;
+    }
   }
 
   return result;
