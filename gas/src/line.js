@@ -45,6 +45,53 @@ function replyLineMessage_(replyToken, messages) {
   }
 }
 
+function pushLineMessage_(toUserId, messages) {
+  if (!toUserId) {
+    Logger.log('pushLineMessage_: toUserId is empty');
+    return;
+  }
+
+  if (!LINE_CHANNEL_ACCESS_TOKEN) {
+    throw new Error('LINE_CHANNEL_ACCESS_TOKEN が設定されていません');
+  }
+
+  const normalizedMessages = Array.isArray(messages)
+    ? messages
+    : [
+        {
+          type: 'text',
+          text: String(messages || ''),
+        },
+      ];
+
+  const url = 'https://api.line.me/v2/bot/message/push';
+
+  const payload = {
+    to: toUserId,
+    messages: normalizedMessages,
+  };
+
+  const response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      Authorization: 'Bearer ' + LINE_CHANNEL_ACCESS_TOKEN,
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  const statusCode = response.getResponseCode();
+  const responseText = response.getContentText();
+
+  Logger.log('LINE push status: ' + statusCode);
+  Logger.log('LINE push response: ' + responseText);
+
+  if (statusCode < 200 || statusCode >= 300) {
+    throw new Error('LINE pushエラー: ' + responseText);
+  }
+}
+
 function getLineImageContent_(messageId) {
   if (!messageId) {
     throw new Error('messageId が指定されていません');
