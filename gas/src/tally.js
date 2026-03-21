@@ -1,34 +1,113 @@
 function handleTally_(data) {
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(
-    SHEET_NAMES.LEDGER,
-  );
+  Logger.log('handleTally_ start');
+  Logger.log('handleTally_ payload: ' + JSON.stringify(data));
 
   const now = new Date();
   const answers = normalizeTallyAnswers_(data);
+  const rawJson = JSON.stringify(data);
 
-  const row = [
-    formatDate_(now), // 受付日時
-    "未対応", // ステータス
-    "Tally", // 受付経路
-    answers.companyName, // 顧客名
-    answers.contactName, // 担当者名
-    answers.email, // メールアドレス
-    answers.phone, // 電話番号
-    answers.inquiry, // 案件内容
-    answers.dueDate, // 希望納期
-    answers.material, // 材質
-    answers.sizeThickness, // サイズ・板厚
-    answers.quantity, // 数量
-    answers.notes, // 補足事項
-    answers.fileUrl, // 図面・参考資料
-    JSON.stringify(data), // raw_json
-  ];
+  Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
 
-  sheet.appendRow(row);
+  appendInternalLogRow_({
+    id: '',
+    createdAt: now,
+    source: 'Tally',
+    status: '未対応',
+    customerName: answers.companyName,
+    contactName: answers.contactName,
+    projectName: answers.inquiry,
+    drawingNumber: '',
+    material: answers.material,
+    size: answers.sizeThickness,
+    quantity: answers.quantity,
+    dueDate: answers.dueDate,
+    notes: answers.notes,
+    rawText: answers.inquiry,
+    lineUserId: '',
+    aiExtractedJson: rawJson,
+    similarCase: '',
+    pastUnitPrice: '',
+    suggestedPrice: '',
+    spreadsheetUpdatedAt: now,
+  });
+
+  Logger.log('handleTally_ internal log appended');
+
+  appendLedgerRow_({
+    receivedAt: now,
+    status: '未対応',
+    source: 'Tally',
+    customerName: answers.companyName,
+    contactName: answers.contactName,
+    email: answers.email,
+    phone: answers.phone,
+    inquiry: answers.inquiry,
+    dueDate: answers.dueDate,
+    material: answers.material,
+    sizeThickness: answers.sizeThickness,
+    quantity: answers.quantity,
+    notes: answers.notes,
+    drawingUrl: answers.fileUrl,
+    rawJson: rawJson,
+  });
+
+  Logger.log('handleTally_ ledger appended');
+
+  notifyTallyInquiry_(answers);
+  Logger.log('handleTally_ notify finished');
 
   return ContentService.createTextOutput(
     JSON.stringify({ ok: true }),
   ).setMimeType(ContentService.MimeType.JSON);
+}
+
+function notifyTallyInquiry_(answers) {
+  if (!LINE_NOTIFY_USER_ID) {
+    Logger.log('LINE_NOTIFY_USER_ID 未設定のため通知スキップ');
+    return;
+  }
+
+  const message = buildTallyNotifyMessage_(answers);
+
+  try {
+    pushLineMessage_(LINE_NOTIFY_USER_ID, [
+      {
+        type: 'text',
+        text: message,
+      },
+    ]);
+  } catch (error) {
+    Logger.log('notifyTallyInquiry_ error: ' + error.message);
+    Logger.log('notifyTallyInquiry_ error stack: ' + error.stack);
+  }
+}
+
+function buildTallyNotifyMessage_(answers) {
+  const inquiry = hasTallyValue_(answers.inquiry) ? answers.inquiry : '未入力';
+  const dueDate = hasTallyValue_(answers.dueDate)
+    ? answers.dueDate
+    : '未入力（要確認）';
+
+  return [
+    '新規問い合わせ（見積依頼）が届きました。',
+    '',
+    '会社名：' + normalizeTallyValue_(answers.companyName),
+    '担当者名：' + normalizeTallyValue_(answers.contactName),
+    '案件名：' + inquiry,
+    '希望納期：' + dueDate,
+    '',
+    '詳細は案件台帳を確認してください。',
+    'https://docs.google.com/spreadsheets/d/1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ',
+  ].join('\n');
+}
+
+function normalizeTallyValue_(value) {
+  return hasTallyValue_(value) ? String(value).trim() : '未入力';
+}
+
+function hasTallyValue_(value) {
+  if (value === null || value === undefined) return false;
+  return String(value).trim() !== '';
 }
 
 function normalizeTallyAnswers_(payload) {
