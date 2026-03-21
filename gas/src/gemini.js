@@ -160,7 +160,11 @@ function buildGeminiPrompt_(text) {
     '- 不明な値は空文字 "" にする',
     '- project_name は「案件名」として抽出する',
     '- drawing_number は図面番号だけを入れる',
-    '- size_thickness にはサイズと板厚をまとめて入れる（例: \"300×200×t3mm\"）',
+    '- size_thickness にはサイズと板厚をまとめて入れる',
+    '- size_thickness は可能なら「300×200 t3.0mm」のように整える',
+    '- サイズは「100×200」のように × を使い、数字を単純連結しない',
+    '- 板厚は「t2.0」「t3.0mm」のように t を付けて表記する',
+    '- サイズのみ分かる場合はサイズだけ、板厚のみ分かる場合は板厚だけを入れる',
     '- quantity はできるだけ元文に忠実に文字列で入れる（例: \"10個\"）',
     '- desired_due_date は元文の表現をそのまま入れる（例: \"来週まで\"）',
     '- processing には加工分類や加工内容を入れる（例: \"レーザー加工\", \"曲げ加工\", \"レーザー加工＋曲げ\"）',
@@ -198,7 +202,11 @@ function buildGeminiImagePrompt_() {
     '- 不明な値は空文字 "" にする',
     '- project_name は「案件名」として抽出する',
     '- drawing_number は図面番号だけを入れる',
-    '- size_thickness にはサイズと板厚をまとめて入れる（例: \"300×200×t3mm\"）',
+    '- size_thickness にはサイズと板厚をまとめて入れる',
+    '- size_thickness は可能なら「300×200 t3.0mm」のように整える',
+    '- サイズは「100×200」のように × を使い、数字を単純連結しない',
+    '- 板厚は「t2.0」「t3.0mm」のように t を付けて表記する',
+    '- サイズのみ分かる場合はサイズだけ、板厚のみ分かる場合は板厚だけを入れる',
     '- quantity は画像中の表記に忠実に文字列で入れる（例: \"10個\"）',
     '- desired_due_date は画像中の表現をそのまま入れる',
     '- processing には加工分類や加工内容を入れる',
@@ -240,7 +248,56 @@ function normalizeGeminiResult_(parsed, originalText) {
 }
 
 function normalizeSizeThickness_(value) {
-  return toSafeString_(value);
+  let normalized = toSafeString_(value);
+
+  if (!normalized) return '';
+
+  normalized = normalized.replace(/[✕xX]/g, '×');
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+  normalized = normalized.replace(/mm\s*t\s*=?\s*/gi, ' t');
+  normalized = normalized.replace(/mmt\s*=?\s*/gi, ' t');
+  normalized = normalized.replace(/\bt\s*=\s*/gi, 't');
+  normalized = normalized.replace(/\bt\s+/gi, 't');
+  normalized = normalized.replace(/×\s*t/gi, ' t');
+  normalized = normalized.replace(/(\d)\s*t(\d)/gi, '$1 t$2');
+
+  const compact = normalized.replace(/\s+/g, '');
+  const joinedSizeThicknessMatch = compact.match(
+    /^(\d{2,4})(\d{2,4})mm?t(\d+(?:\.\d+)?)$/i
+  );
+
+  if (joinedSizeThicknessMatch) {
+    return (
+      joinedSizeThicknessMatch[1] +
+      '×' +
+      joinedSizeThicknessMatch[2] +
+      ' t' +
+      joinedSizeThicknessMatch[3] +
+      'mm'
+    );
+  }
+
+  const joinedSizeWithThicknessMatch = compact.match(
+    /^(\d{2,4})(\d{2,4})t(\d+(?:\.\d+)?)$/i
+  );
+
+  if (joinedSizeWithThicknessMatch) {
+    return (
+      joinedSizeWithThicknessMatch[1] +
+      '×' +
+      joinedSizeWithThicknessMatch[2] +
+      ' t' +
+      joinedSizeWithThicknessMatch[3]
+    );
+  }
+
+  const joinedSizeMatch = compact.match(/^(\d{2,4})(\d{2,4})mm$/i);
+
+  if (joinedSizeMatch) {
+    return joinedSizeMatch[1] + '×' + joinedSizeMatch[2] + ' mm';
+  }
+
+  return normalized;
 }
 
 function toSafeString_(value) {

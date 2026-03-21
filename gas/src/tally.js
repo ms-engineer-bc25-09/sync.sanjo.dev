@@ -18,6 +18,20 @@ function handleTally_(data) {
   answers.quantity = answers.quantity || parsed.quantity || '';
   answers.notes = answers.notes || parsed.notes || '';
 
+  let drawingUrl = answers.fileUrl || '';
+
+  if (answers.fileUrl) {
+    try {
+      drawingUrl = uploadTallyFileToSupabase_(answers.fileUrl, {
+        receivedAt: now,
+      });
+      Logger.log('handleTally_ uploaded file to supabase: ' + drawingUrl);
+    } catch (error) {
+      Logger.log('handleTally_ file upload error: ' + error.message);
+      Logger.log('handleTally_ file upload error stack: ' + error.stack);
+    }
+  }
+
   Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
   Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
 
@@ -60,7 +74,7 @@ function handleTally_(data) {
     sizeThickness: answers.sizeThickness,
     quantity: answers.quantity,
     notes: answers.notes,
-    drawingUrl: answers.fileUrl,
+    drawingUrl: drawingUrl,
     rawJson: rawJson,
   });
 
