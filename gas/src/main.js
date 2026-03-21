@@ -14,6 +14,7 @@ function doPost(e) {
 
     // Tallyルート
     if (typeof handleTally_ === 'function') {
+      Logger.log('doPost: tally route');
       handleTally_(data);
     }
 
