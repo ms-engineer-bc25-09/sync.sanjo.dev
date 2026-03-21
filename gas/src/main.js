@@ -220,7 +220,7 @@ function handleLineImageMessage_(event) {
       '\n\n' +
       '不足があれば補足をテキストで送ってください。\n\n' +
       '修正は案件台帳から直接できます。\n' +
-      'https://docs.google.com/spreadsheets/d/1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ';
+      SPREADSHEET_URL;
 
     replyLineMessage_(replyToken, [
       {
@@ -526,9 +526,7 @@ function buildLineTextReplyMessage_(result, prefix) {
   lines.push('不足があれば補足をテキストで送ってください。');
   lines.push('');
   lines.push('修正は案件台帳から直接できます。');
-  lines.push(
-    'https://docs.google.com/spreadsheets/d/1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ'
-  );
+  lines.push(SPREADSHEET_URL);
 
   return lines.join('\n');
 }

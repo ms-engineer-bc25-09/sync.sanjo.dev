@@ -1,4 +1,6 @@
 const SHEET_ID = '1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ';
+const SPREADSHEET_URL =
+  'https://docs.google.com/spreadsheets/d/1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ';
 
 const SHEET_NAMES = {
   LEDGER: '案件台帳',
