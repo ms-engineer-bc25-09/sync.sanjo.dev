@@ -97,7 +97,7 @@ function buildTallyNotifyMessage_(answers) {
     '希望納期：' + dueDate,
     '',
     '詳細は案件台帳を確認してください。',
-    'https://docs.google.com/spreadsheets/d/1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ',
+    SPREADSHEET_URL,
   ].join('\n');
 }
 
