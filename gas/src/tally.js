@@ -4,9 +4,22 @@ function handleTally_(data) {
 
   const now = new Date();
   const answers = normalizeTallyAnswers_(data);
+  const fields = data?.data?.fields || data?.fields || [];
+  const freeText = getFieldValueByLabel_(
+    fields,
+    '具体的な内容を教えてください（必須）',
+  );
+  const parsed = parseFreeText_(freeText);
   const rawJson = JSON.stringify(data);
 
+  answers.inquiry = answers.inquiry || parsed.project_name || '';
+  answers.dueDate = answers.dueDate || parsed.due_date || '';
+  answers.material = answers.material || parsed.material || '';
+  answers.quantity = answers.quantity || parsed.quantity || '';
+  answers.notes = answers.notes || parsed.notes || '';
+
   Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
+  Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
 
   appendInternalLogRow_({
     id: '',
@@ -108,6 +121,63 @@ function normalizeTallyValue_(value) {
 function hasTallyValue_(value) {
   if (value === null || value === undefined) return false;
   return String(value).trim() !== '';
+}
+
+function getFieldValueByLabel_(fields, label) {
+  if (!Array.isArray(fields) || !label) return '';
+
+  const field = fields.find(function (item) {
+    const fieldLabel = item?.label || item?.title || '';
+    return fieldLabel === label;
+  });
+
+  return field ? extractFieldValue_(field) : '';
+}
+
+function parseFreeText_(text) {
+  const result = {};
+
+  if (!text || !String(text).trim()) return result;
+
+  const lines = String(text).split(/\r?\n/);
+
+  lines.forEach(function (line) {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    const parts = trimmed.split(/[：:]/);
+    if (parts.length < 2) return;
+
+    const key = (parts[0] || '').trim();
+    const value = parts.slice(1).join('：').trim();
+    if (!value) return;
+
+    if (key.includes('案件名')) {
+      result.project_name = value;
+      return;
+    }
+
+    if (key.includes('材質')) {
+      result.material = value;
+      return;
+    }
+
+    if (key.includes('数量')) {
+      result.quantity = value;
+      return;
+    }
+
+    if (key.includes('希望納期')) {
+      result.due_date = value;
+      return;
+    }
+
+    if (key.includes('備考')) {
+      result.notes = value;
+    }
+  });
+
+  return result;
 }
 
 function normalizeTallyAnswers_(payload) {
