@@ -99,7 +99,7 @@ function handleLine_(data) {
 function handleLineTextMessage_(event) {
   const lineUserId = event.source?.userId || '';
   const replyToken = event.replyToken || '';
-  const text = event.message?.text || '';
+  const text = (event.message?.text || '').trim();
 
   Logger.log('handleLineTextMessage_ start');
   Logger.log('lineUserId: ' + lineUserId);
@@ -110,12 +110,65 @@ function handleLineTextMessage_(event) {
     return;
   }
 
+  const richMenuGuideReply = buildRichMenuGuideReply_(text);
+  if (richMenuGuideReply) {
+    if (replyToken) {
+      replyLineMessage_(replyToken, richMenuGuideReply);
+    }
+    return;
+  }
+
+  if (text === '類似') {
+    if (replyToken) {
+      const similarReplyText = buildSimilarCaseReplyFromLatestProject_(
+        lineUserId
+      );
+      replyLineMessage_(replyToken, [
+        {
+          type: 'text',
+          text: similarReplyText,
+        },
+      ]);
+    }
+    return;
+  }
+
   const geminiResult = callGemini_(text);
 
   Logger.log('text gemini result: ' + JSON.stringify(geminiResult));
 
+  if (!geminiResult) {
+    if (replyToken) {
+      replyLineMessage_(
+        replyToken,
+        '受付内容の読み取りに失敗しました。内容を変えてもう一度送ってください。'
+      );
+    }
+    return;
+  }
+
+  let parsedResult;
+
+  try {
+    parsedResult =
+      typeof geminiResult === 'string'
+        ? JSON.parse(geminiResult)
+        : geminiResult;
+  } catch (parseError) {
+    Logger.log('Gemini JSON parse error: ' + parseError.message);
+    Logger.log('Gemini raw result: ' + geminiResult);
+
+    if (replyToken) {
+      replyLineMessage_(
+        replyToken,
+        '受付内容の整理に失敗しました。少し表現を変えてもう一度送ってください。'
+      );
+    }
+    return;
+  }
+
   saveLineGeminiResultToSheets_({
-    geminiResult: geminiResult,
+    geminiResult: parsedResult,
     source: 'LINE',
     status: '未対応',
     rawText: text,
@@ -124,10 +177,7 @@ function handleLineTextMessage_(event) {
   });
 
   if (replyToken) {
-    const replyText = buildLineTextReplyMessage_(
-      geminiResult,
-      '内容を受け取りました。'
-    );
+    const replyText = buildLineRegistrationReplyMessage_(parsedResult);
 
     replyLineMessage_(replyToken, [
       {
@@ -136,6 +186,124 @@ function handleLineTextMessage_(event) {
       },
     ]);
   }
+}
+
+function buildRichMenuGuideReply_(text) {
+  const guides = {
+    図面FAXを登録してください:
+      '図面画像を送ってください。受信後、内容を読み取って案件登録します。',
+    テキストで案件を登録してください:
+      '案件内容をそのままテキストで送ってください。\n顧客名案件名材質数量希望納期が入っていると整理しやすいです。',
+    音声で案件を登録してください:
+      '音声登録は未対応です。\n現在はテキストまたは画像で送ってください。',
+    過去案件検索ができる予定です:
+      '過去案件検索は準備中です。\n案件登録後に「類似」と送ると検索できる形を予定しています。',
+  };
+
+  return guides[text] || null;
+}
+
+function buildLineRegistrationReplyMessage_(project) {
+  const customerName = project.customer_name || '未登録';
+  const projectName = project.project_name || '未登録';
+  const material = project.material || '未登録';
+  const quantity = project.quantity || '未登録';
+  const dueDate = project.desired_due_date || project.due_date || '未登録';
+
+  return [
+    '案件を受付しました。',
+    '',
+    '顧客名：' + customerName,
+    '案件名：' + projectName,
+    '材質：' + material,
+    '数量：' + quantity,
+    '希望納期：' + dueDate,
+    '',
+    '内容に問題があれば、そのまま修正して送ってください。',
+    '',
+    '過去の類似案件も確認できます。',
+    '「類似」と送ると検索します。',
+    '',
+    '台帳はこちら：',
+    SPREADSHEET_URL,
+  ].join('\n');
+}
+
+function buildSimilarCaseReplyFromLatestProject_(lineUserId) {
+  if (!lineUserId) {
+    return [
+      '類似案件検索の基準となる案件が見つかりませんでした。',
+      '',
+      '先に案件内容を登録してから「類似」と送ってください。',
+    ].join('\n');
+  }
+
+  try {
+    const latestProject = findLatestInternalLogByLineUserId_(lineUserId);
+
+    if (!latestProject) {
+      return [
+        '類似案件検索の基準となる案件が見つかりませんでした。',
+        '',
+        '先に案件内容を登録してから「類似」と送ってください。',
+      ].join('\n');
+    }
+
+    const similarCaseResult = findSimilarCaseFromSampleSheet_(latestProject);
+
+    if (!similarCaseResult || !similarCaseResult.project) {
+      return buildNoSimilarCaseReply_();
+    }
+
+    return buildSimilarCaseReply_(
+      similarCaseResult.project,
+      similarCaseResult.reason
+    );
+  } catch (error) {
+    Logger.log(
+      'buildSimilarCaseReplyFromLatestProject_ error: ' + error.message
+    );
+    Logger.log(
+      'buildSimilarCaseReplyFromLatestProject_ error stack: ' + error.stack
+    );
+
+    return [
+      '類似案件検索でエラーが発生しました。',
+      '',
+      '時間をおいてもう一度「類似」と送ってください。',
+    ].join('\n');
+  }
+}
+
+function buildSimilarCaseReply_(project, reason) {
+  return [
+    '類似案件が見つかりました。（' + reason + '）',
+    '',
+    '顧客名：' + (project.customerName || '未登録'),
+    '案件名：' + (project.projectName || '未登録'),
+    '図面番号：' + (project.drawingNumber || '-'),
+    '前回単価：' + (project.pastUnitPrice || '未登録'),
+    '受付日：' + (project.receivedAt || '-'),
+    '',
+    '見積の参考にしてください。',
+    '台帳はこちら：',
+    SPREADSHEET_URL,
+  ].join('\n');
+}
+
+function buildNoSimilarCaseReply_() {
+  return [
+    '類似案件は見つかりませんでした。',
+    '',
+    '検索条件：',
+    '図面番号一致',
+    '顧客名で検索',
+    '案件名のキーワード一致',
+    '',
+    '新規案件としてご確認ください。',
+    '台帳はこちら：',
+    SPREADSHEET_URL,
+  ].join('\n');
 }
 
 function handleLineImageMessage_(event) {
@@ -163,10 +331,14 @@ function handleLineImageMessage_(event) {
       receivedAt: new Date(),
       fileName: imageData.blob ? imageData.blob.getName() : '',
     });
-    Logger.log('handleLineImageMessage_ uploaded file to supabase: ' + drawingUrl);
+    Logger.log(
+      'handleLineImageMessage_ uploaded file to supabase: ' + drawingUrl
+    );
   } catch (error) {
     Logger.log('handleLineImageMessage_ file upload error: ' + error.message);
-    Logger.log('handleLineImageMessage_ file upload error stack: ' + error.stack);
+    Logger.log(
+      'handleLineImageMessage_ file upload error stack: ' + error.stack
+    );
   }
 
   const rawText =
@@ -428,11 +600,7 @@ function buildSupabaseStoragePath_(options, contentType) {
   const source = (options?.source || 'misc').toLowerCase();
   const extension = inferFileExtension_(options?.fileName || '', contentType);
 
-  return [
-    source,
-    datePath,
-    Utilities.getUuid() + extension,
-  ].join('/');
+  return [source, datePath, Utilities.getUuid() + extension].join('/');
 }
 
 function inferFileExtension_(fileUrl, contentType) {
