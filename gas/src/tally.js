@@ -7,7 +7,7 @@ function handleTally_(data) {
   const fields = data?.data?.fields || data?.fields || [];
   const freeText = getFieldValueByLabel_(
     fields,
-    '具体的な内容を教えてください（必須）'
+    '具体的な内容を教えてください（必須）',
   );
   const parsed = parseFreeText_(freeText);
   const rawJson = JSON.stringify(data);
@@ -49,7 +49,7 @@ function handleTally_(data) {
     quantity: answers.quantity,
     dueDate: answers.dueDate,
     notes: answers.notes,
-    rawText: freeText,
+    rawText: answers.inquiry,
     lineUserId: '',
     aiExtractedJson: rawJson,
     similarCase: '',
@@ -84,7 +84,7 @@ function handleTally_(data) {
   Logger.log('handleTally_ notify finished');
 
   return ContentService.createTextOutput(
-    JSON.stringify({ ok: true })
+    JSON.stringify({ ok: true }),
   ).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -122,8 +122,6 @@ function buildTallyNotifyMessage_(answers) {
     '担当者名：' + normalizeTallyValue_(answers.contactName),
     '案件名：' + inquiry,
     '希望納期：' + dueDate,
-    '材質：' + normalizeTallyValue_(answers.material),
-    '数量：' + normalizeTallyValue_(answers.quantity),
     '',
     '詳細は案件台帳を確認してください。',
     SPREADSHEET_URL,
@@ -200,37 +198,38 @@ function normalizeTallyAnswers_(payload) {
   const fields = payload?.data?.fields || payload?.fields || [];
 
   const result = {
-    companyName: '',
-    contactName: '',
-    email: '',
-    phone: '',
-    inquiry: '',
-    dueDate: '',
-    material: '',
-    sizeThickness: '',
-    quantity: '',
-    notes: '',
-    fileUrl: '',
+    companyName: "",
+    contactName: "",
+    email: "",
+    phone: "",
+    inquiry: "",
+    dueDate: "",
+    material: "",
+    sizeThickness: "",
+    quantity: "",
+    notes: "",
+    fileUrl: "",
   };
 
   for (const field of fields) {
-    const label = field.label || field.title || '';
+    const label = field.label || field.title || "";
     const value = extractFieldValue_(field);
 
-    if (label.includes('会社名')) result.companyName = value;
-    else if (label.includes('ご担当者名')) result.contactName = value;
-    else if (label.includes('メールアドレス')) result.email = value;
-    else if (label.includes('電話番号')) result.phone = value;
-    else if (label.includes('ご相談内容')) result.inquiry = value;
-    else if (label.includes('希望納期')) result.dueDate = value;
-    else if (label.includes('材質')) result.material = value;
-    else if (label.includes('サイズ・板厚') || label.includes('サイズ板厚')) {
+    if (label.includes("会社名")) result.companyName = value;
+    else if (label.includes("ご担当者名")) result.contactName = value;
+    else if (label.includes("メールアドレス")) result.email = value;
+    else if (label.includes("電話番号")) result.phone = value;
+    else if (label.includes("ご相談内容")) result.inquiry = value;
+    else if (label.includes("希望納期")) result.dueDate = value;
+    else if (label.includes("材質")) result.material = value;
+    else if (label.includes("サイズ・板厚") || label.includes("サイズ板厚")) {
       result.sizeThickness = value;
-    } else if (label.includes('数量')) result.quantity = value;
-    else if (label.includes('補足事項')) result.notes = value;
+    }
+    else if (label.includes("数量")) result.quantity = value;
+    else if (label.includes("補足事項")) result.notes = value;
     else if (
-      label.includes('図面・参考資料') ||
-      label.includes('図面参考資料')
+      label.includes("図面・参考資料") ||
+      label.includes("図面参考資料")
     ) {
       result.fileUrl = value;
     }
