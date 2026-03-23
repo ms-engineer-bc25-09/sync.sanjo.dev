@@ -115,7 +115,7 @@ function handleLinePostback_(event) {
     return;
   }
 
-  if (data === 'past_case_search') {
+  if (data === 'action=past_case_search') {
     if (replyToken) {
       replyLineMessage_(replyToken, handlePastCaseSearchEntry_(lineUserId));
     }
@@ -147,11 +147,15 @@ function handleLineTextMessage_(event) {
   }
 
   const lineUserState = getLineUserState_(lineUserId);
-  if (lineUserState && lineUserState.mode === 'search_waiting_input') {
+  if (
+    lineUserState &&
+    (lineUserState.mode === 'search_waiting_type' ||
+      lineUserState.mode === 'search_waiting_value')
+  ) {
     if (replyToken) {
       replyLineMessage_(
         replyToken,
-        handlePastCaseSearchInput_(lineUserId, text)
+        handlePastCaseSearchInput_(lineUserId, text, lineUserState)
       );
     }
     return;
@@ -374,24 +378,65 @@ function handlePastCaseSearchEntry_(lineUserId) {
     return '過去案件検索を開始できませんでした。しばらくしてからもう一度送ってください。';
   }
 
-  setLineUserState_(lineUserId, 'search_waiting_input', {
+  setLineUserState_(lineUserId, 'search_waiting_type', {
     flow: 'past_case_search',
   });
 
   return [
-    '過去案件検索を受け付けました。',
-    '',
-    '図面番号、顧客名、案件名のいずれかを送ってください。',
-  ].join('\n');
+    {
+      type: 'text',
+      text: '過去案件検索を受け付けました。\n\nどの条件で探しますか？',
+      quickReply: {
+        items: [
+          buildSearchTypeQuickReplyItem_('図面番号'),
+          buildSearchTypeQuickReplyItem_('顧客名'),
+          buildSearchTypeQuickReplyItem_('案件名'),
+        ],
+      },
+    },
+  ];
 }
 
-function handlePastCaseSearchInput_(lineUserId, text) {
+function handlePastCaseSearchInput_(lineUserId, text, lineUserState) {
   try {
-    const similarCaseResult = findSimilarCaseFromSampleSheet_({
-      drawingNumber: text,
-      customerName: text,
-      projectName: text,
-    });
+    const mode = lineUserState?.mode || '';
+    const payload = lineUserState?.payload || {};
+
+    if (mode === 'search_waiting_type') {
+      const searchType = getPastCaseSearchType_(text);
+
+      if (!searchType) {
+        return [
+          {
+            type: 'text',
+            text: '図面番号、顧客名、案件名のいずれかを選んでください。',
+            quickReply: {
+              items: [
+                buildSearchTypeQuickReplyItem_('図面番号'),
+                buildSearchTypeQuickReplyItem_('顧客名'),
+                buildSearchTypeQuickReplyItem_('案件名'),
+              ],
+            },
+          },
+        ];
+      }
+
+      setLineUserState_(lineUserId, 'search_waiting_value', {
+        flow: 'past_case_search',
+        searchType: searchType,
+      });
+
+      return getPastCaseSearchPromptByType_(searchType);
+    }
+
+    if (mode !== 'search_waiting_value') {
+      clearLineUserState_(lineUserId);
+      return '検索状態を確認できませんでした。もう一度お試しください。';
+    }
+
+    const similarCaseResult = findSimilarCaseFromSampleSheet_(
+      buildPastCaseSearchQuery_(payload.searchType, text)
+    );
 
     clearLineUserState_(lineUserId);
 
@@ -414,6 +459,65 @@ function handlePastCaseSearchInput_(lineUserId, text) {
       '時間をおいてもう一度送ってください。',
     ].join('\n');
   }
+}
+
+function buildSearchTypeQuickReplyItem_(label) {
+  return {
+    type: 'action',
+    action: {
+      type: 'message',
+      label: label,
+      text: label,
+    },
+  };
+}
+
+function getPastCaseSearchType_(text) {
+  const normalized = String(text || '').trim();
+
+  if (normalized === '図面番号') return 'drawing_number';
+  if (normalized === '顧客名') return 'customer_name';
+  if (normalized === '案件名') return 'project_name';
+
+  return '';
+}
+
+function getPastCaseSearchPromptByType_(searchType) {
+  if (searchType === 'drawing_number') {
+    return '図面番号を送ってください。';
+  }
+
+  if (searchType === 'customer_name') {
+    return '顧客名を送ってください。';
+  }
+
+  return '案件名を送ってください。';
+}
+
+function buildPastCaseSearchQuery_(searchType, text) {
+  const query = String(text || '').trim();
+
+  if (searchType === 'drawing_number') {
+    return {
+      drawingNumber: query,
+      customerName: '',
+      projectName: '',
+    };
+  }
+
+  if (searchType === 'customer_name') {
+    return {
+      drawingNumber: '',
+      customerName: query,
+      projectName: '',
+    };
+  }
+
+  return {
+    drawingNumber: '',
+    customerName: '',
+    projectName: query,
+  };
 }
 
 function formatLineDate_(value) {
@@ -1051,7 +1155,7 @@ function testHandleLinePostback() {
       {
         type: 'postback',
         postback: {
-          data: 'past_case_search',
+          data: 'action=past_case_search',
         },
         source: {
           type: 'user',

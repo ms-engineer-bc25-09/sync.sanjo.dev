@@ -16,8 +16,8 @@ function buildMessagingApiRichMenuConfig_() {
           height: 843,
         },
         action: {
-          type: 'message',
-          text: '書類を撮る',
+          type: 'uri',
+          uri: 'https://line.me/R/nv/camera/',
         },
       },
       {
@@ -28,8 +28,9 @@ function buildMessagingApiRichMenuConfig_() {
           height: 843,
         },
         action: {
-          type: 'message',
-          text: 'メモを残す',
+          type: 'uri',
+          uri:
+            'https://line.me/R/oaMessage/%40159hyvek/?%E6%A1%88%E4%BB%B6%E5%90%8D%EF%BC%9A%0A%E9%A1%A7%E5%AE%A2%E5%90%8D%EF%BC%9A%0A%E6%9D%90%E8%B3%AA%EF%BC%9A%0A%E6%95%B0%E9%87%8F%EF%BC%9A%0A%E5%B8%8C%E6%9C%9B%E7%B4%8D%E6%9C%9F%EF%BC%9A',
         },
       },
       {
@@ -41,7 +42,7 @@ function buildMessagingApiRichMenuConfig_() {
         },
         action: {
           type: 'message',
-          text: '声で残す',
+          text: '音声登録は準備中です。テキストまたは画像から登録してください。',
         },
       },
       {
@@ -53,7 +54,7 @@ function buildMessagingApiRichMenuConfig_() {
         },
         action: {
           type: 'postback',
-          data: 'past_case_search',
+          data: 'action=past_case_search',
         },
       },
       {
@@ -70,6 +71,10 @@ function buildMessagingApiRichMenuConfig_() {
       },
     ],
   };
+}
+
+function createAndSetDefaultMessagingApiRichMenu() {
+  return createAndSetDefaultMessagingApiRichMenu_();
 }
 
 function createAndSetDefaultMessagingApiRichMenu_() {
@@ -120,8 +125,11 @@ function uploadMessagingApiRichMenuImage_(richMenuId) {
 
   callLineMessagingApi_('/v2/bot/richmenu/' + richMenuId + '/content', {
     method: 'post',
-    contentType: contentType,
     payload: blob.getBytes(),
+    useDataApiDomain: true,
+    headers: {
+      'Content-Type': contentType,
+    },
   });
 }
 
@@ -141,6 +149,10 @@ function getDefaultMessagingApiRichMenu_() {
   });
 }
 
+function getDefaultMessagingApiRichMenu() {
+  return getDefaultMessagingApiRichMenu_();
+}
+
 function deleteMessagingApiRichMenu_(richMenuId) {
   if (!richMenuId) {
     throw new Error('richMenuId が指定されていません');
@@ -156,12 +168,20 @@ function callLineMessagingApi_(path, options) {
     throw new Error('LINE_CHANNEL_ACCESS_TOKEN が設定されていません');
   }
 
-  const response = UrlFetchApp.fetch('https://api.line.me' + path, {
+  const domain = options.useDataApiDomain
+    ? 'https://api-data.line.me'
+    : 'https://api.line.me';
+  const url = domain + path;
+  const headers = Object.assign({}, options.headers || {}, {
+    Authorization: 'Bearer ' + LINE_CHANNEL_ACCESS_TOKEN,
+  });
+
+  Logger.log('LINE Messaging API request: ' + url);
+
+  const response = UrlFetchApp.fetch(url, {
     method: options.method || 'get',
     contentType: options.contentType,
-    headers: {
-      Authorization: 'Bearer ' + LINE_CHANNEL_ACCESS_TOKEN,
-    },
+    headers: headers,
     payload: options.payload,
     muteHttpExceptions: true,
   });
