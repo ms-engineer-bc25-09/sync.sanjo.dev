@@ -153,8 +153,21 @@ function handleLineImageMessage_(event) {
 
   const imageData = getLineImageContent_(messageId);
   const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
+  let drawingUrl = '';
 
   Logger.log('image gemini result: ' + JSON.stringify(geminiResult));
+
+  try {
+    drawingUrl = uploadBlobToSupabase_(imageData.blob, {
+      source: 'line',
+      receivedAt: new Date(),
+      fileName: imageData.blob ? imageData.blob.getName() : '',
+    });
+    Logger.log('handleLineImageMessage_ uploaded file to supabase: ' + drawingUrl);
+  } catch (error) {
+    Logger.log('handleLineImageMessage_ file upload error: ' + error.message);
+    Logger.log('handleLineImageMessage_ file upload error stack: ' + error.stack);
+  }
 
   const rawText =
     'LINE画像メッセージを受信\n' +
@@ -175,7 +188,7 @@ function handleLineImageMessage_(event) {
     rawText: rawText,
     source: 'LINE',
     status: '未対応',
-    drawingUrl: '',
+    drawingUrl: drawingUrl,
   });
   const internalLogRow = buildInternalLogRowFromGeminiResult_({
     geminiResult: geminiResult,
@@ -220,7 +233,7 @@ function handleLineImageMessage_(event) {
       '\n\n' +
       '不足があれば補足をテキストで送ってください。\n\n' +
       '修正は案件台帳から直接できます。\n' +
-      'https://docs.google.com/spreadsheets/d/1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ';
+      SPREADSHEET_URL;
 
     replyLineMessage_(replyToken, [
       {
@@ -333,6 +346,127 @@ function saveProjectToSupabase_(options) {
     Logger.log('saveProjectToSupabase_ error: ' + error.message);
     Logger.log('saveProjectToSupabase_ error stack: ' + error.stack);
   }
+}
+
+function uploadTallyFileToSupabase_(fileUrl, options) {
+  if (!fileUrl) {
+    throw new Error('fileUrl が指定されていません');
+  }
+
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    throw new Error('Supabase config が設定されていません');
+  }
+
+  const fileResponse = UrlFetchApp.fetch(fileUrl, {
+    method: 'get',
+    muteHttpExceptions: true,
+  });
+  const fileStatusCode = fileResponse.getResponseCode();
+
+  Logger.log('uploadTallyFileToSupabase_ file fetch status: ' + fileStatusCode);
+
+  if (fileStatusCode < 200 || fileStatusCode >= 300) {
+    throw new Error(
+      'Tally添付ファイル取得エラー: ' + fileResponse.getContentText()
+    );
+  }
+
+  const blob = fileResponse.getBlob();
+  const mergedOptions = Object.assign({}, options, {
+    fileName: fileUrl,
+  });
+
+  return uploadBlobToSupabase_(blob, mergedOptions);
+}
+
+function uploadBlobToSupabase_(blob, options) {
+  if (!blob) {
+    throw new Error('blob が指定されていません');
+  }
+
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    throw new Error('Supabase config が設定されていません');
+  }
+
+  const contentType = blob.getContentType() || 'application/octet-stream';
+  const objectPath = buildSupabaseStoragePath_(options, contentType);
+  const uploadUrl =
+    SUPABASE_URL.replace(/\/$/, '') +
+    '/storage/v1/object/' +
+    SUPABASE_STORAGE_BUCKET +
+    '/' +
+    objectPath;
+
+  const response = UrlFetchApp.fetch(uploadUrl, {
+    method: 'post',
+    contentType: contentType,
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: 'Bearer ' + SUPABASE_KEY,
+      'x-upsert': 'true',
+    },
+    payload: blob.getBytes(),
+    muteHttpExceptions: true,
+  });
+
+  const statusCode = response.getResponseCode();
+  const body = response.getContentText();
+
+  Logger.log('uploadTallyFileToSupabase_ upload status: ' + statusCode);
+  Logger.log('uploadTallyFileToSupabase_ upload response: ' + body);
+
+  if (statusCode < 200 || statusCode >= 300) {
+    throw new Error('Supabase Storageアップロードエラー: ' + body);
+  }
+
+  return buildSupabasePublicFileUrl_(SUPABASE_STORAGE_BUCKET, objectPath);
+}
+
+function buildSupabaseStoragePath_(options, contentType) {
+  const receivedAt = options?.receivedAt || new Date();
+  const datePath = Utilities.formatDate(receivedAt, 'Asia/Tokyo', 'yyyy/MM/dd');
+  const source = (options?.source || 'misc').toLowerCase();
+  const extension = inferFileExtension_(options?.fileName || '', contentType);
+
+  return [
+    source,
+    datePath,
+    Utilities.getUuid() + extension,
+  ].join('/');
+}
+
+function inferFileExtension_(fileUrl, contentType) {
+  const urlMatch = String(fileUrl || '').match(/\.([a-zA-Z0-9]+)(?:\?|$)/);
+
+  if (urlMatch) {
+    return '.' + urlMatch[1].toLowerCase();
+  }
+
+  const mimeType = String(contentType || '').toLowerCase();
+
+  if (mimeType === 'image/jpeg') return '.jpg';
+  if (mimeType === 'image/png') return '.png';
+  if (mimeType === 'application/pdf') return '.pdf';
+  if (mimeType === 'image/webp') return '.webp';
+
+  return '.bin';
+}
+
+function buildSupabasePublicFileUrl_(bucketName, objectPath) {
+  const encodedPath = String(objectPath || '')
+    .split('/')
+    .map(function (segment) {
+      return encodeURIComponent(segment);
+    })
+    .join('/');
+
+  return (
+    SUPABASE_URL.replace(/\/$/, '') +
+    '/storage/v1/object/public/' +
+    encodeURIComponent(bucketName) +
+    '/' +
+    encodedPath
+  );
 }
 
 function buildSupabaseProjectPayload_(options) {
@@ -526,9 +660,7 @@ function buildLineTextReplyMessage_(result, prefix) {
   lines.push('不足があれば補足をテキストで送ってください。');
   lines.push('');
   lines.push('修正は案件台帳から直接できます。');
-  lines.push(
-    'https://docs.google.com/spreadsheets/d/1hnFUAN514puTxfHNqkZZiKdmT7sN8B2EkGGBGs_FUjQ'
-  );
+  lines.push(SPREADSHEET_URL);
 
   return lines.join('\n');
 }
