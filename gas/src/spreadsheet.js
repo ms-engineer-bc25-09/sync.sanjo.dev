@@ -152,3 +152,277 @@ function saveLineGeminiResultToSheets_(params) {
 
   Logger.log('saveLineGeminiResultToSheets_ success');
 }
+
+function findLatestInternalLogByLineUserId_(lineUserId) {
+  if (!lineUserId) return null;
+
+  const sheet = getSheetByName_(SHEET_NAMES.INTERNAL_LOG);
+  const values = sheet.getDataRange().getValues();
+
+  if (!values || values.length < 2) return null;
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const indexMap = buildHeaderIndexMap_(headers);
+
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    const rowLineUserId = getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.INTERNAL_LOG.LINE_USER_ID
+    );
+
+    if (String(rowLineUserId || '').trim() !== String(lineUserId).trim()) {
+      continue;
+    }
+
+    return {
+      createdAt: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.CREATED_AT
+      ),
+      customerName: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.CUSTOMER_NAME
+      ),
+      contactName: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.CONTACT_NAME
+      ),
+      projectName: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.PROJECT_NAME
+      ),
+      drawingNumber: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.DRAWING_NUMBER
+      ),
+      material: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.MATERIAL
+      ),
+      size: getCellValueByHeader_(row, indexMap, COLUMNS.INTERNAL_LOG.SIZE),
+      quantity: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.QUANTITY
+      ),
+      dueDate: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.DUE_DATE
+      ),
+      notes: getCellValueByHeader_(row, indexMap, COLUMNS.INTERNAL_LOG.NOTES),
+      rawText: getCellValueByHeader_(
+        row,
+        indexMap,
+        COLUMNS.INTERNAL_LOG.RAW_TEXT
+      ),
+    };
+  }
+
+  return null;
+}
+
+function findSimilarCaseFromSampleSheet_(baseProject) {
+  const sheet = getSheetByName_(SHEET_NAMES.SIMILAR_CASES);
+  const values = sheet.getDataRange().getValues();
+
+  if (!values || values.length < 2) {
+    return null;
+  }
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const indexMap = buildHeaderIndexMap_(headers);
+
+  const normalizedDrawingNumber = normalizeTextForMatch_(
+    baseProject.drawingNumber
+  );
+  const normalizedCustomerName = normalizeTextForMatch_(
+    baseProject.customerName
+  );
+  const projectKeywords = extractProjectKeywords_(baseProject.projectName);
+
+  if (normalizedDrawingNumber) {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      const sampleDrawingNumber = normalizeTextForMatch_(
+        getCellValueByHeader_(
+          row,
+          indexMap,
+          COLUMNS.SIMILAR_CASES.DRAWING_NUMBER
+        )
+      );
+
+      if (
+        sampleDrawingNumber &&
+        sampleDrawingNumber === normalizedDrawingNumber
+      ) {
+        return {
+          reason: '図面番号一致',
+          project: buildSimilarCaseProjectFromRow_(row, indexMap),
+        };
+      }
+    }
+  }
+
+  if (normalizedCustomerName) {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      const sampleCustomerName = normalizeTextForMatch_(
+        getCellValueByHeader_(
+          row,
+          indexMap,
+          COLUMNS.SIMILAR_CASES.CUSTOMER_NAME
+        )
+      );
+
+      if (
+        sampleCustomerName &&
+        (sampleCustomerName.indexOf(normalizedCustomerName) >= 0 ||
+          normalizedCustomerName.indexOf(sampleCustomerName) >= 0)
+      ) {
+        return {
+          reason: '顧客名で検索',
+          project: buildSimilarCaseProjectFromRow_(row, indexMap),
+        };
+      }
+    }
+  }
+
+  if (projectKeywords.length > 0) {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      const sampleProjectName = normalizeTextForMatch_(
+        getCellValueByHeader_(row, indexMap, COLUMNS.SIMILAR_CASES.PROJECT_NAME)
+      );
+
+      if (!sampleProjectName) continue;
+
+      for (let j = 0; j < projectKeywords.length; j += 1) {
+        if (sampleProjectName.indexOf(projectKeywords[j]) >= 0) {
+          return {
+            reason: '案件名のキーワード一致',
+            project: buildSimilarCaseProjectFromRow_(row, indexMap),
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildSimilarCaseProjectFromRow_(row, indexMap) {
+  return {
+    projectId: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.PROJECT_ID
+    ),
+    receivedAt: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.RECEIVED_AT
+    ),
+    customerName: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.CUSTOMER_NAME
+    ),
+    contactName: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.CONTACT_NAME
+    ),
+    projectName: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.PROJECT_NAME
+    ),
+    drawingNumber: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.DRAWING_NUMBER
+    ),
+    processingType: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.PROCESS_TYPE
+    ),
+    material: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.MATERIAL
+    ),
+    size: getCellValueByHeader_(row, indexMap, COLUMNS.SIMILAR_CASES.SIZE),
+    quantity: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.QUANTITY
+    ),
+    dueDate: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.DUE_DATE
+    ),
+    pastUnitPrice: getCellValueByHeader_(
+      row,
+      indexMap,
+      COLUMNS.SIMILAR_CASES.PAST_UNIT_PRICE
+    ),
+    notes: getCellValueByHeader_(row, indexMap, COLUMNS.SIMILAR_CASES.NOTES),
+  };
+}
+
+function buildHeaderIndexMap_(headers) {
+  const map = {};
+
+  for (let i = 0; i < headers.length; i += 1) {
+    map[String(headers[i]).trim()] = i;
+  }
+
+  return map;
+}
+
+function getCellValueByHeader_(row, indexMap, headerName) {
+  const index = indexMap[String(headerName).trim()];
+
+  if (index === undefined || index === null) {
+    return '';
+  }
+
+  return row[index];
+}
+
+function normalizeTextForMatch_(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[　\s]+/g, '');
+}
+
+function extractProjectKeywords_(projectName) {
+  const normalized = String(projectName || '')
+    .replace(/[　]/g, ' ')
+    .trim();
+
+  if (!normalized) return [];
+
+  return normalized
+    .split(/\s+/)
+    .map(function (keyword) {
+      return normalizeTextForMatch_(keyword);
+    })
+    .filter(function (keyword) {
+      return keyword && keyword.length >= 2;
+    });
+}
