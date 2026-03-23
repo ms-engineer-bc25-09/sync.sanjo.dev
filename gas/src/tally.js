@@ -49,7 +49,7 @@ function handleTally_(data) {
     quantity: answers.quantity,
     dueDate: answers.dueDate,
     notes: answers.notes,
-    rawText: answers.inquiry,
+    rawText: freeText || answers.inquiry,
     lineUserId: '',
     aiExtractedJson: rawJson,
     similarCase: '',
