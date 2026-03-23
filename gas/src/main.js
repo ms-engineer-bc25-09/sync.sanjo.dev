@@ -43,6 +43,11 @@ function handleLine_(data) {
 
     for (const event of events) {
       try {
+        if (event.type === 'postback') {
+          handleLinePostback_(event);
+          continue;
+        }
+
         if (event.type !== 'message') continue;
 
         const messageType = event.message?.type || '';
@@ -96,6 +101,30 @@ function handleLine_(data) {
   }
 }
 
+function handleLinePostback_(event) {
+  const lineUserId = event.source?.userId || '';
+  const replyToken = event.replyToken || '';
+  const data = (event.postback?.data || '').trim();
+
+  Logger.log('handleLinePostback_ start');
+  Logger.log('lineUserId: ' + lineUserId);
+  Logger.log('postback data: ' + data);
+
+  if (!data) {
+    Logger.log('handleLinePostback_: data is empty');
+    return;
+  }
+
+  if (data === 'past_case_search') {
+    if (replyToken) {
+      replyLineMessage_(replyToken, handlePastCaseSearchEntry_(lineUserId));
+    }
+    return;
+  }
+
+  Logger.log('skip unsupported postback data: ' + data);
+}
+
 function handleLineTextMessage_(event) {
   const lineUserId = event.source?.userId || '';
   const replyToken = event.replyToken || '';
@@ -110,6 +139,24 @@ function handleLineTextMessage_(event) {
     return;
   }
 
+  if (isPastCaseSearchEntryText_(text)) {
+    if (replyToken) {
+      replyLineMessage_(replyToken, handlePastCaseSearchEntry_(lineUserId));
+    }
+    return;
+  }
+
+  const lineUserState = getLineUserState_(lineUserId);
+  if (lineUserState && lineUserState.mode === 'search_waiting_input') {
+    if (replyToken) {
+      replyLineMessage_(
+        replyToken,
+        handlePastCaseSearchInput_(lineUserId, text)
+      );
+    }
+    return;
+  }
+
   const richMenuGuideReply = buildRichMenuGuideReply_(text);
   if (richMenuGuideReply) {
     if (replyToken) {
@@ -120,9 +167,8 @@ function handleLineTextMessage_(event) {
 
   if (text === '類似') {
     if (replyToken) {
-      const similarReplyText = buildSimilarCaseReplyFromLatestProject_(
-        lineUserId
-      );
+      const similarReplyText =
+        buildSimilarCaseReplyFromLatestProject_(lineUserId);
       replyLineMessage_(replyToken, [
         {
           type: 'text',
@@ -161,7 +207,7 @@ function handleLineTextMessage_(event) {
     if (replyToken) {
       replyLineMessage_(
         replyToken,
-        '受付内容の整理に失敗しました。少し表現を変えてもう一度送ってください。'
+        '内容をうまく整理できませんでした。\n\n顧客名・案件名・数量などを\n少し補足して送っていただけますか？'
       );
     }
     return;
@@ -191,40 +237,52 @@ function handleLineTextMessage_(event) {
 function buildRichMenuGuideReply_(text) {
   const guides = {
     図面FAXを登録してください:
-      '図面画像を送ってください。受信後、内容を読み取って案件登録します。',
+      '図面画像を送ってください。\n受信後、内容を読み取って案件登録します。',
+    図面FAXを登録します:
+      '図面画像を送ってください。\n受信後、内容を読み取って案件登録します。',
+    書類を撮る:
+      '書類の画像を送ってください。\n受信後、内容を読み取って案件登録します。',
     テキストで案件を登録してください:
       '案件内容をそのままテキストで送ってください。\n顧客名案件名材質数量希望納期が入っていると整理しやすいです。',
+    テキストで登録します:
+      '案件内容をそのままテキストで送ってください。\n顧客名案件名材質数量希望納期が入っていると整理しやすいです。',
+    メモを残す:
+      '案件内容をそのままテキストで送ってください。\n顧客名案件名材質数量希望納期が入っていると整理しやすいです。',
     音声で案件を登録してください:
-      '音声登録は未対応です。\n現在はテキストまたは画像で送ってください。',
-    過去案件検索ができる予定です:
-      '過去案件検索は準備中です。\n案件登録後に「類似」と送ると検索できる形を予定しています。',
+      '音声登録は、現在準備中です。',
+    音声で登録します:
+      '音声登録は、現在準備中です。',
+    声で残す:
+      '音声登録は、現在準備中です。',
   };
 
   return guides[text] || null;
 }
 
 function buildLineRegistrationReplyMessage_(project) {
-  const customerName = project.customer_name || '未登録';
-  const projectName = project.project_name || '未登録';
-  const material = project.material || '未登録';
-  const quantity = project.quantity || '未登録';
-  const dueDate = project.desired_due_date || project.due_date || '未登録';
+  const customerName = project.customer_name || '登録なし';
+  const projectName = project.project_name || '登録なし';
+  const material = project.material || '登録なし';
+  const quantity = project.quantity || '登録なし';
+  const dueDate = formatLineDate_(
+    project.desired_due_date || project.due_date || ''
+  );
 
   return [
     '案件を受付しました。',
     '',
-    '顧客名：' + customerName,
-    '案件名：' + projectName,
-    '材質：' + material,
-    '数量：' + quantity,
-    '希望納期：' + dueDate,
+    '・顧客名：' + customerName,
+    '・案件名：' + projectName,
+    '・材質：' + material,
+    '・数量：' + quantity,
+    '・希望納期：' + (dueDate === '-' ? '登録なし' : dueDate),
     '',
-    '内容に問題があれば、そのまま修正して送ってください。',
+    '内容の変更があれば、',
+    '項目名と一緒に送ってください。',
     '',
-    '過去の類似案件も確認できます。',
-    '「類似」と送ると検索します。',
+    '「類似」と送ると、過去の類似案件を検索できます。',
     '',
-    '台帳はこちら：',
+    '案件台帳はこちら：',
     SPREADSHEET_URL,
   ].join('\n');
 }
@@ -232,7 +290,7 @@ function buildLineRegistrationReplyMessage_(project) {
 function buildSimilarCaseReplyFromLatestProject_(lineUserId) {
   if (!lineUserId) {
     return [
-      '類似案件検索の基準となる案件が見つかりませんでした。',
+      '類似する案件は見つかりませんでした。',
       '',
       '先に案件内容を登録してから「類似」と送ってください。',
     ].join('\n');
@@ -243,7 +301,7 @@ function buildSimilarCaseReplyFromLatestProject_(lineUserId) {
 
     if (!latestProject) {
       return [
-        '類似案件検索の基準となる案件が見つかりませんでした。',
+        '類似する案件は見つかりませんでした。',
         '',
         '先に案件内容を登録してから「類似」と送ってください。',
       ].join('\n');
@@ -279,11 +337,11 @@ function buildSimilarCaseReply_(project, reason) {
   return [
     '類似案件が見つかりました。（' + reason + '）',
     '',
-    '顧客名：' + (project.customerName || '未登録'),
-    '案件名：' + (project.projectName || '未登録'),
+    '顧客名：' + (project.customerName || '登録なし'),
+    '案件名：' + (project.projectName || '登録なし'),
     '図面番号：' + (project.drawingNumber || '-'),
-    '前回単価：' + (project.pastUnitPrice || '未登録'),
-    '受付日：' + (project.receivedAt || '-'),
+    '前回単価：' + (project.pastUnitPrice || '登録なし'),
+    '受付日：' + formatLineDate_(project.receivedAt),
     '',
     '見積の参考にしてください。',
     '台帳はこちら：',
@@ -295,15 +353,99 @@ function buildNoSimilarCaseReply_() {
   return [
     '類似案件は見つかりませんでした。',
     '',
-    '検索条件：',
-    '図面番号一致',
-    '顧客名で検索',
-    '案件名のキーワード一致',
+    '今回の検索条件：',
+    '・図面番号一致',
+    '・顧客名で検索',
+    '・案件名のキーワード一致',
     '',
-    '新規案件としてご確認ください。',
     '台帳はこちら：',
     SPREADSHEET_URL,
   ].join('\n');
+}
+
+function isPastCaseSearchEntryText_(text) {
+  return (
+    text === '過去案件検索' || text === '過去案件検索ができる予定です'
+  );
+}
+
+function handlePastCaseSearchEntry_(lineUserId) {
+  if (!lineUserId) {
+    return '過去案件検索を開始できませんでした。しばらくしてからもう一度送ってください。';
+  }
+
+  setLineUserState_(lineUserId, 'search_waiting_input', {
+    flow: 'past_case_search',
+  });
+
+  return [
+    '過去案件検索を受け付けました。',
+    '',
+    '図面番号、顧客名、案件名のいずれかを送ってください。',
+  ].join('\n');
+}
+
+function handlePastCaseSearchInput_(lineUserId, text) {
+  try {
+    const similarCaseResult = findSimilarCaseFromSampleSheet_({
+      drawingNumber: text,
+      customerName: text,
+      projectName: text,
+    });
+
+    clearLineUserState_(lineUserId);
+
+    if (!similarCaseResult || !similarCaseResult.project) {
+      return buildNoSimilarCaseReply_();
+    }
+
+    return buildSimilarCaseReply_(
+      similarCaseResult.project,
+      similarCaseResult.reason
+    );
+  } catch (error) {
+    Logger.log('handlePastCaseSearchInput_ error: ' + error.message);
+    Logger.log('handlePastCaseSearchInput_ error stack: ' + error.stack);
+    clearLineUserState_(lineUserId);
+
+    return [
+      '過去案件検索でエラーが発生しました。',
+      '',
+      '時間をおいてもう一度送ってください。',
+    ].join('\n');
+  }
+}
+
+function formatLineDate_(value) {
+  if (!value) {
+    return '-';
+  }
+
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    if (isNaN(value.getTime())) return '-';
+    return Utilities.formatDate(value, 'Asia/Tokyo', 'yyyy/MM/dd');
+  }
+
+  const text = String(value).trim();
+
+  if (!text) {
+    return '-';
+  }
+
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(text)) {
+    return text;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text.replace(/-/g, '/');
+  }
+
+  const parsedDate = new Date(text);
+  if (isNaN(parsedDate.getTime())) {
+    return text;
+  }
+
+  return Utilities.formatDate(parsedDate, 'Asia/Tokyo', 'yyyy/MM/dd');
 }
 
 function handleLineImageMessage_(event) {
@@ -379,15 +521,15 @@ function handleLineImageMessage_(event) {
   });
 
   if (replyToken) {
-    const customerName = geminiResult.customer_name || '未入力';
-    const projectName = geminiResult.project_name || '未入力';
-    const material = geminiResult.material || '未入力';
-    const quantity = geminiResult.quantity || '未入力';
-    const dueDate = geminiResult.desired_due_date || '未入力';
+    const customerName = geminiResult.customer_name || '登録なし';
+    const projectName = geminiResult.project_name || '登録なし';
+    const material = geminiResult.material || '登録なし';
+    const quantity = geminiResult.quantity || '登録なし';
+    const dueDate = formatLineDate_(geminiResult.desired_due_date || '');
 
     const replyText =
-      '画像を受け取りました。\n' +
-      '以下の内容で記録しました。\n\n' +
+      '画像を受け付けました。\n' +
+      '以下の内容で登録しました。\n\n' +
       '・顧客名：' +
       customerName +
       '\n' +
@@ -401,10 +543,14 @@ function handleLineImageMessage_(event) {
       quantity +
       '\n' +
       '・希望納期：' +
-      dueDate +
+      (dueDate === '-' ? '登録なし' : dueDate) +
       '\n\n' +
-      '不足があれば補足をテキストで送ってください。\n\n' +
-      '修正は案件台帳から直接できます。\n' +
+      '内容の変更があれば、\n' +
+      '項目名と一緒に送ってください。\n' +
+      'その内容で登録情報を上書きします。\n\n' +
+      '過去の類似案件も確認できます。\n' +
+      '「類似」と送ると検索します。\n\n' +
+      '案件台帳はこちら：\n' +
       SPREADSHEET_URL;
 
     replyLineMessage_(replyToken, [
@@ -517,6 +663,120 @@ function saveProjectToSupabase_(options) {
   } catch (error) {
     Logger.log('saveProjectToSupabase_ error: ' + error.message);
     Logger.log('saveProjectToSupabase_ error stack: ' + error.stack);
+  }
+}
+
+function getLineUserState_(lineUserId) {
+  if (!lineUserId || !SUPABASE_URL || !SUPABASE_KEY) {
+    return null;
+  }
+
+  const url =
+    SUPABASE_URL.replace(/\/$/, '') +
+    '/rest/v1/line_user_states?line_user_id=eq.' +
+    encodeURIComponent(lineUserId) +
+    '&select=line_user_id,mode,payload,created_at,updated_at&limit=1';
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+      },
+      muteHttpExceptions: true,
+    });
+
+    const statusCode = response.getResponseCode();
+    const body = response.getContentText();
+
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log('getLineUserState_ status: ' + statusCode);
+      Logger.log('getLineUserState_ response: ' + body);
+      return null;
+    }
+
+    const rows = JSON.parse(body || '[]');
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return null;
+    }
+
+    return rows[0];
+  } catch (error) {
+    Logger.log('getLineUserState_ error: ' + error.message);
+    Logger.log('getLineUserState_ error stack: ' + error.stack);
+    return null;
+  }
+}
+
+function setLineUserState_(lineUserId, mode, payload) {
+  if (!lineUserId || !mode || !SUPABASE_URL || !SUPABASE_KEY) {
+    return;
+  }
+
+  const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/line_user_states';
+  const now = new Date().toISOString();
+  const body = {
+    line_user_id: lineUserId,
+    mode: mode,
+    payload: payload || {},
+    created_at: now,
+    updated_at: now,
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true,
+    });
+
+    const statusCode = response.getResponseCode();
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log('setLineUserState_ status: ' + statusCode);
+      Logger.log('setLineUserState_ response: ' + response.getContentText());
+    }
+  } catch (error) {
+    Logger.log('setLineUserState_ error: ' + error.message);
+    Logger.log('setLineUserState_ error stack: ' + error.stack);
+  }
+}
+
+function clearLineUserState_(lineUserId) {
+  if (!lineUserId || !SUPABASE_URL || !SUPABASE_KEY) {
+    return;
+  }
+
+  const url =
+    SUPABASE_URL.replace(/\/$/, '') +
+    '/rest/v1/line_user_states?line_user_id=eq.' +
+    encodeURIComponent(lineUserId);
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'delete',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+      },
+      muteHttpExceptions: true,
+    });
+
+    const statusCode = response.getResponseCode();
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log('clearLineUserState_ status: ' + statusCode);
+      Logger.log('clearLineUserState_ response: ' + response.getContentText());
+    }
+  } catch (error) {
+    Logger.log('clearLineUserState_ error: ' + error.message);
+    Logger.log('clearLineUserState_ error stack: ' + error.stack);
   }
 }
 
@@ -785,6 +1045,27 @@ function testHandleLineImage() {
   Logger.log('testHandleLineImage result: ' + result.getContent());
 }
 
+function testHandleLinePostback() {
+  const mockData = {
+    events: [
+      {
+        type: 'postback',
+        postback: {
+          data: 'past_case_search',
+        },
+        source: {
+          type: 'user',
+          userId: 'TEST_LINE_USER_ID',
+        },
+        replyToken: 'TEST_REPLY_TOKEN',
+      },
+    ],
+  };
+
+  const result = handleLine_(mockData);
+  Logger.log('testHandleLinePostback result: ' + result.getContent());
+}
+
 function buildLineTextReplyMessage_(result, prefix) {
   const lines = [];
 
@@ -811,7 +1092,7 @@ function buildLineTextReplyMessage_(result, prefix) {
   }
 
   if (hasReplyValue_(result.desired_due_date)) {
-    lines.push('・希望納期：' + result.desired_due_date);
+    lines.push('・希望納期：' + formatLineDate_(result.desired_due_date));
   }
 
   // 必要なら追加表示（任意）

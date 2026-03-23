@@ -302,11 +302,7 @@ function findSimilarCaseFromSampleSheet_(baseProject) {
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const row = rows[i];
       const sampleProjectName = normalizeTextForMatch_(
-        getCellValueByHeader_(
-          row,
-          indexMap,
-          COLUMNS.SIMILAR_CASES.PROJECT_NAME
-        )
+        getCellValueByHeader_(row, indexMap, COLUMNS.SIMILAR_CASES.PROJECT_NAME)
       );
 
       if (!sampleProjectName) continue;
