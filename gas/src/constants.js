@@ -7,6 +7,8 @@ const SHEET_NAMES = {
   LEDGER: '案件台帳',
   INTERNAL_LOG: '内部ログ',
   SIMILAR_CASES: '類似案件サンプル',
+  IMAGE_LEDGER: '画像案件台帳',
+  IMAGE_INTERNAL_LOG: '画像内部ログ',
 };
 
 const COLUMNS = {
@@ -50,6 +52,7 @@ const COLUMNS = {
   },
 
   LEDGER: {
+    ID: 'ID',
     RECEIVED_AT: '受付日時',
     STATUS: 'ステータス',
     SOURCE: '受付経路',
@@ -60,11 +63,55 @@ const COLUMNS = {
     INQUIRY: '案件名',
     DUE_DATE: '希望納期',
     MATERIAL: '材質',
-    SIZE_THICKNESS: 'サイズ・板厚',
+    SIZE_THICKNESS: 'サイズ板厚',
     QUANTITY: '数量',
     NOTES: '補足事項',
     DRAWING_URL: '図面URL',
     RAW_JSON: 'raw_json',
+  },
+
+  IMAGE_LEDGER: {
+    ID: 'ID',
+    RECEIVED_AT: '受付日時',
+    SOURCE: '受付経路',
+    PROJECT_TYPE: '種別',
+    CUSTOMER_NAME: '顧客名',
+    CONTACT_NAME: '担当者名',
+    EMAIL: 'メールアドレス',
+    PHONE: '電話番号',
+    PROJECT_NAME: '案件名',
+    DUE_DATE: '希望納期',
+    MATERIAL: '材質',
+    SIZE_THICKNESS: 'サイズ板厚',
+    QUANTITY: '数量',
+    NOTES: '補足事項',
+    ORIGINAL_FILE_NAME: '元ファイル名',
+    ORIGINAL_IMAGE_URL: '元画像URL',
+    DRAWING_URL: '図面URL',
+    STATUS: 'ステータス',
+    LEDGER_ID: '案件台帳ID',
+  },
+
+  IMAGE_INTERNAL_LOG: {
+    ID: 'ID',
+    CREATED_AT: '作成日時',
+    UPDATED_AT: '更新日時',
+    SOURCE: '受付経路',
+    PROJECT_TYPE: '種別',
+    STATUS: 'ステータス',
+    CUSTOMER_NAME: '顧客名',
+    CONTACT_NAME: '担当者名',
+    PROJECT_NAME: '案件名',
+    ORIGINAL_FILE_NAME: '元ファイル名',
+    ORIGINAL_IMAGE_URL: '元画像URL',
+    SAVED_IMAGE_URL: '保存画像URL',
+    OCR_TEXT: 'OCR全文',
+    AI_EXTRACTED_JSON: 'AI抽出結果JSON',
+    VALIDATION_RESULT: '検証結果',
+    PROCESSING_STATUS: '処理状況',
+    ERROR_MESSAGE: 'エラー内容',
+    LEDGER_ID: '案件台帳ID',
+    NOTES: '備考',
   },
 };
 

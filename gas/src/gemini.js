@@ -193,6 +193,7 @@ function buildGeminiImagePrompt_() {
   return [
     'あなたは町工場向けの見積受付アシスタントです。',
     '添付された画像（図面、FAX、手書きメモ、見積依頼書など）を読み取り、案件情報を抽出してください。',
+    '1画像に複数の明細が含まれる場合は、必ず items 配列に分けてください。',
     '必ずJSONのみで返してください。',
     '説明文、補足、コードブロック、前置き、後置きは不要です。',
     '',
@@ -211,6 +212,14 @@ function buildGeminiImagePrompt_() {
     '- desired_due_date は画像中の表現をそのまま入れる',
     '- processing には加工分類や加工内容を入れる',
     '- notes には補足事項や特記事項を書く',
+    '- quote_no には見積Noを入れる（例: "S-0214"）',
+    '- total_amount には合計金額を数字または数字入り文字列で入れる',
+    '- items は明細ごとの配列にする',
+    '- items が1件だけでも配列にする',
+    '- items[n].item_name は明細の品名や部品名',
+    '- items[n].quantity はその明細の数量を入れる',
+    '- items[n].unit_price と items[n].amount は画像にあれば入れる',
+    '- 明細ごとの納期があれば items[n].due_date に入れる',
     '- 読み取れない項目は推測しすぎず空文字にする',
     '',
     '出力するJSONのキーは必ず以下のみを使うこと:',
@@ -218,13 +227,29 @@ function buildGeminiImagePrompt_() {
     '  "customer_name": "",',
     '  "contact_name": "",',
     '  "project_name": "",',
+    '  "quote_no": "",',
+    '  "total_amount": "",',
     '  "drawing_number": "",',
     '  "processing": "",',
     '  "material": "",',
     '  "size_thickness": "",',
     '  "quantity": "",',
     '  "desired_due_date": "",',
-    '  "notes": ""',
+    '  "notes": "",',
+    '  "items": [',
+    '    {',
+    '      "item_name": "",',
+    '      "drawing_number": "",',
+    '      "processing": "",',
+    '      "material": "",',
+    '      "size_thickness": "",',
+    '      "quantity": "",',
+    '      "unit_price": "",',
+    '      "amount": "",',
+    '      "due_date": "",',
+    '      "note": ""',
+    '    }',
+    '  ]',
     '}',
   ].join('\n');
 }
@@ -237,6 +262,8 @@ function normalizeGeminiResult_(parsed, originalText) {
     customer_name: toSafeString_(parsed.customer_name),
     contact_name: toSafeString_(parsed.contact_name),
     project_name: toSafeString_(parsed.project_name),
+    quote_no: toSafeString_(parsed.quote_no),
+    total_amount: toSafeString_(parsed.total_amount),
     drawing_number: toSafeString_(parsed.drawing_number),
     processing: toSafeString_(parsed.processing),
     material: toSafeString_(parsed.material),
@@ -244,7 +271,42 @@ function normalizeGeminiResult_(parsed, originalText) {
     quantity: toSafeString_(parsed.quantity),
     desired_due_date: toSafeString_(parsed.desired_due_date),
     notes: notes || fallbackText,
+    items: normalizeGeminiItems_(parsed.items),
   };
+}
+
+function normalizeGeminiItems_(items) {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .map(function (item) {
+      return {
+        item_name: toSafeString_(item?.item_name),
+        drawing_number: toSafeString_(item?.drawing_number),
+        processing: toSafeString_(item?.processing),
+        material: toSafeString_(item?.material),
+        size_thickness: normalizeSizeThickness_(item?.size_thickness),
+        quantity: toSafeString_(item?.quantity),
+        unit_price: toSafeString_(item?.unit_price),
+        amount: toSafeString_(item?.amount),
+        due_date: toSafeString_(item?.due_date),
+        note: toSafeString_(item?.note),
+      };
+    })
+    .filter(function (item) {
+      return (
+        item.item_name ||
+        item.drawing_number ||
+        item.processing ||
+        item.material ||
+        item.size_thickness ||
+        item.quantity ||
+        item.unit_price ||
+        item.amount ||
+        item.due_date ||
+        item.note
+      );
+    });
 }
 
 function normalizeSizeThickness_(value) {
