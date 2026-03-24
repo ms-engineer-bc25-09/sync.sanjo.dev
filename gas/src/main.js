@@ -12,6 +12,15 @@ function doPost(e) {
       return handleLine_(data);
     }
 
+    // Supabase画像Webhookルート
+    if (isSupabaseImageWebhookPayload_(data)) {
+      Logger.log('doPost: supabase image route');
+      handleSupabaseImageWebhook_(data);
+      return ContentService.createTextOutput(
+        JSON.stringify({ ok: true })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // Tallyルート
     if (typeof handleTally_ === 'function') {
       Logger.log('doPost: tally route');
@@ -556,6 +565,7 @@ function handleLineImageMessage_(event) {
   const lineUserId = event.source?.userId || '';
   const replyToken = event.replyToken || '';
   const messageId = event.message?.id || '';
+  const now = new Date();
 
   Logger.log('handleLineImageMessage_ start');
   Logger.log('lineUserId: ' + lineUserId);
@@ -574,7 +584,7 @@ function handleLineImageMessage_(event) {
   try {
     drawingUrl = uploadBlobToSupabase_(imageData.blob, {
       source: 'line',
-      receivedAt: new Date(),
+      receivedAt: now,
       fileName: imageData.blob ? imageData.blob.getName() : '',
     });
     Logger.log(
@@ -601,28 +611,56 @@ function handleLineImageMessage_(event) {
     'size(bytes): ' +
     (imageData.blob ? imageData.blob.getBytes().length : 0);
 
-  const ledgerRow = buildLedgerRowFromGeminiResult_({
+  const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
     geminiResult: geminiResult,
+    receivedAt: now,
     rawText: rawText,
     source: 'LINE',
-    status: '未対応',
+    projectType: '受付メモ',
+    status: '未処理',
+    originalFileName: imageData.blob
+      ? imageData.blob.getName()
+      : 'line-image-' + messageId,
+    originalImageUrl: '',
     drawingUrl: drawingUrl,
   });
-  const internalLogRow = buildInternalLogRowFromGeminiResult_({
+  const imageInternalLogRow = buildImageInternalLogRowFromGeminiResult_({
     geminiResult: geminiResult,
-    ledgerRow: ledgerRow,
-    rawText: rawText,
+    imageLedgerRow: imageLedgerRow,
+    createdAt: now,
+    savedImageUrl: drawingUrl,
+    processingStatus: 'AI抽出済',
+    validationResult: '未確認',
+    errorMessage: '',
+    ocrText: '',
+    notes: rawText,
+  });
+
+  upsertImageInternalLogRow_(imageInternalLogRow);
+  upsertImageLedgerRow_(imageLedgerRow);
+
+  const savedProject = saveProjectToSupabase_({
+    geminiResult: geminiResult,
+    ledgerRow: imageLedgerRow,
+    flowType: 'image',
+    projectType: imageLedgerRow.projectType,
+    originalFileName: imageLedgerRow.originalFileName,
+    originalImageUrl: imageLedgerRow.originalImageUrl,
+    savedImageUrl: drawingUrl,
+    drawingUrl: imageLedgerRow.drawingUrl,
+    ocrText: imageInternalLogRow.ocrText,
+    aiExtractedJson: imageInternalLogRow.aiExtractedJson,
+    validationResult: imageInternalLogRow.validationResult,
+    processingStatus: imageInternalLogRow.processingStatus,
+    errorMessage: imageInternalLogRow.errorMessage,
     lineUserId: lineUserId,
   });
 
-  appendInternalLogRow_(internalLogRow);
-  appendLedgerRow_(ledgerRow);
-
-  saveProjectToSupabase_({
-    geminiResult: geminiResult,
-    ledgerRow: ledgerRow,
-    lineUserId: lineUserId,
-  });
+  if (savedProject && savedProject.id) {
+    saveProjectItemsToSupabase_(savedProject.id, geminiResult, {
+      parentDueDate: imageLedgerRow.dueDate,
+    });
+  }
 
   if (replyToken) {
     const customerName = geminiResult.customer_name || '登録なし';
@@ -687,6 +725,7 @@ function buildLedgerRowFromGeminiResult_(options) {
   }
 
   return {
+    id: options.id || '',
     receivedAt: new Date(),
     status: options.status || '',
     source: options.source || '',
@@ -702,6 +741,41 @@ function buildLedgerRowFromGeminiResult_(options) {
     notes: result.notes || '',
     drawingUrl: options.drawingUrl || '',
     rawJson: rawJson,
+  };
+}
+
+function buildImageLedgerRowFromGeminiResult_(options) {
+  const result = options.geminiResult || {};
+  const primaryItem = getPrimaryGeminiItem_(result);
+  const rawText = (options.rawText || '').trim();
+  const projectName = (result.project_name || '').trim();
+  const itemName = (primaryItem.item_name || '').trim();
+  const drawingNumber = (result.drawing_number || '').trim();
+  const fallbackProjectName =
+    projectName || itemName || drawingNumber || rawText || '画像受信案件';
+
+  return {
+    id: options.id || '',
+    receivedAt: options.receivedAt || new Date(),
+    source: options.source || '',
+    projectType: options.projectType || '',
+    customerName: result.customer_name || primaryItem.customer_name || '',
+    contactName: result.contact_name || primaryItem.contact_name || '',
+    email: options.email || '',
+    phone: options.phone || '',
+    projectName: fallbackProjectName,
+    dueDate: result.desired_due_date || primaryItem.due_date || '',
+    material: result.material || primaryItem.material || '',
+    sizeThickness:
+      result.size_thickness || primaryItem.size_thickness || '',
+    quantity: result.quantity || primaryItem.quantity || '',
+    notes: result.notes || primaryItem.note || '',
+    originalFileName: options.originalFileName || '',
+    originalImageUrl: options.originalImageUrl || '',
+    drawingUrl: options.drawingUrl || '',
+    status: options.status || '',
+    ledgerId: options.ledgerId || '',
+    rawJson: safeStringify_(result),
   };
 }
 
@@ -734,10 +808,252 @@ function buildInternalLogRowFromGeminiResult_(options) {
   };
 }
 
+function buildImageInternalLogRowFromGeminiResult_(options) {
+  const result = options.geminiResult || {};
+  const imageLedgerRow = options.imageLedgerRow || {};
+  const createdAt = options.createdAt || imageLedgerRow.receivedAt || new Date();
+
+  return {
+    id: options.id || '',
+    createdAt: createdAt,
+    updatedAt: options.updatedAt || createdAt,
+    source: imageLedgerRow.source || '',
+    projectType: imageLedgerRow.projectType || '',
+    status: imageLedgerRow.status || '',
+    customerName: imageLedgerRow.customerName || '',
+    contactName: imageLedgerRow.contactName || '',
+    projectName: result.project_name || imageLedgerRow.projectName || '',
+    originalFileName: imageLedgerRow.originalFileName || '',
+    originalImageUrl: imageLedgerRow.originalImageUrl || '',
+    savedImageUrl: options.savedImageUrl || imageLedgerRow.drawingUrl || '',
+    ocrText: options.ocrText || '',
+    aiExtractedJson:
+      options.aiExtractedJson || imageLedgerRow.rawJson || safeStringify_(result),
+    validationResult: options.validationResult || '',
+    processingStatus: options.processingStatus || '',
+    errorMessage: options.errorMessage || '',
+    ledgerId: imageLedgerRow.ledgerId || '',
+    notes: options.notes || imageLedgerRow.notes || '',
+  };
+}
+
+function getPrimaryGeminiItem_(result) {
+  const items = Array.isArray(result?.items) ? result.items : [];
+
+  if (!items.length) {
+    return {};
+  }
+
+  return items[0] || {};
+}
+
+function safeStringify_(value) {
+  try {
+    return JSON.stringify(value || {});
+  } catch (error) {
+    Logger.log('safeStringify_ error: ' + error.message);
+    return '';
+  }
+}
+
+function handleSupabaseImageWebhook_(data) {
+  const record = getSupabaseWebhookProjectRecord_(data);
+
+  if (!record) {
+    throw new Error('Supabase webhook payload に record がありません');
+  }
+
+  const eventType = getSupabaseWebhookEventType_(data);
+  if (eventType === 'DELETE') {
+    Logger.log('handleSupabaseImageWebhook_ skipped: delete event');
+    return;
+  }
+
+  const imageUrl = extractSupabaseImageUrl_(record);
+  if (!imageUrl) {
+    throw new Error('Supabase webhook payload に画像URLがありません');
+  }
+
+  const imageData = fetchImageFromUrl_(imageUrl);
+  const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
+  const receivedAt = parseDateValue_(record.received_at) || new Date();
+  const rawText = buildSupabaseImageWebhookRawText_(record, imageData, imageUrl);
+  const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
+    id: record.id || '',
+    geminiResult: geminiResult,
+    receivedAt: receivedAt,
+    rawText: rawText,
+    source: normalizeSupabaseWebhookSource_(record.source_type || record.source),
+    projectType: record.project_type || '受付メモ',
+    status: '未処理',
+    email: record.email || '',
+    phone: record.phone || '',
+    originalFileName: record.original_file_name || imageData.fileName || '',
+    originalImageUrl: record.original_image_url || '',
+    drawingUrl: record.saved_image_url || record.drawing_url || imageUrl,
+    ledgerId: record.ledger_id || '',
+  });
+  const imageInternalLogRow = buildImageInternalLogRowFromGeminiResult_({
+    geminiResult: geminiResult,
+    imageLedgerRow: imageLedgerRow,
+    createdAt: receivedAt,
+    updatedAt: parseDateValue_(record.updated_at) || receivedAt,
+    savedImageUrl: imageLedgerRow.drawingUrl,
+    processingStatus: record.processing_status || 'AI抽出済',
+    validationResult: record.validation_result || '未確認',
+    errorMessage: record.error_message || '',
+    ocrText: record.ocr_text || '',
+    aiExtractedJson:
+      safeStringify_(geminiResult) || safeStringify_(record.ai_extracted_json),
+    notes: rawText,
+    id: record.id || '',
+  });
+
+  upsertImageInternalLogRow_(imageInternalLogRow);
+  upsertImageLedgerRow_(imageLedgerRow);
+
+  Logger.log(
+    'handleSupabaseImageWebhook_ success: projectId=' +
+      String(record.id || '') +
+      ' fileName=' +
+      String(imageLedgerRow.originalFileName || '')
+  );
+}
+
+function isSupabaseImageWebhookPayload_(data) {
+  const record = getSupabaseWebhookProjectRecord_(data);
+
+  if (!record) {
+    return false;
+  }
+
+  const eventType = getSupabaseWebhookEventType_(data);
+  if (eventType === 'DELETE') {
+    return false;
+  }
+
+  const flowType = String(record.flow_type || record.flowType || '').toLowerCase();
+  if (flowType && flowType !== 'image') {
+    return false;
+  }
+
+  return Boolean(extractSupabaseImageUrl_(record));
+}
+
+function getSupabaseWebhookProjectRecord_(data) {
+  const candidates = [
+    data?.record,
+    data?.new,
+    data?.data?.record,
+    data?.event?.data?.record,
+    data,
+  ];
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      if (
+        candidate.saved_image_url ||
+        candidate.original_image_url ||
+        candidate.drawing_url ||
+        candidate.flow_type ||
+        candidate.project_type
+      ) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getSupabaseWebhookEventType_(data) {
+  return String(
+    data?.type || data?.eventType || data?.event_type || data?.operation || ''
+  ).toUpperCase();
+}
+
+function extractSupabaseImageUrl_(record) {
+  return String(
+    record?.saved_image_url ||
+      record?.drawing_url ||
+      record?.original_image_url ||
+      ''
+  ).trim();
+}
+
+function fetchImageFromUrl_(fileUrl) {
+  const response = UrlFetchApp.fetch(fileUrl, {
+    method: 'get',
+    muteHttpExceptions: true,
+  });
+  const statusCode = response.getResponseCode();
+
+  Logger.log('fetchImageFromUrl_ status: ' + statusCode);
+
+  if (statusCode < 200 || statusCode >= 300) {
+    throw new Error('画像取得エラー: ' + response.getContentText());
+  }
+
+  const blob = response.getBlob();
+  const fileName = inferFileNameFromUrl_(fileUrl);
+  if (fileName) {
+    blob.setName(fileName);
+  }
+
+  return {
+    blob: blob,
+    mimeType: blob.getContentType() || 'image/jpeg',
+    base64: Utilities.base64Encode(blob.getBytes()),
+    fileName: blob.getName() || fileName || '',
+  };
+}
+
+function inferFileNameFromUrl_(fileUrl) {
+  const match = String(fileUrl || '').match(/\/([^\/?#]+)(?:\?|#|$)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function parseDateValue_(value) {
+  if (!value) return null;
+
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function normalizeSupabaseWebhookSource_(value) {
+  const source = String(value || '').trim().toLowerCase();
+
+  if (!source) {
+    return 'Supabase';
+  }
+
+  if (source === 'line') return 'LINE';
+  if (source === 'tally') return 'Tally';
+  if (source === 'fax') return 'FAX';
+  if (source === 'email') return 'Email';
+  if (source === 'phone') return 'Phone';
+
+  return String(value);
+}
+
+function buildSupabaseImageWebhookRawText_(record, imageData, imageUrl) {
+  return [
+    'Supabase画像Webhookを受信',
+    'projectId: ' + String(record.id || ''),
+    'sourceType: ' + String(record.source_type || record.source || ''),
+    'projectType: ' + String(record.project_type || ''),
+    'fileName: ' + String(record.original_file_name || imageData.fileName || ''),
+    'imageUrl: ' + imageUrl,
+    'contentType: ' + String(imageData.mimeType || ''),
+    'size(bytes): ' + String(imageData.blob ? imageData.blob.getBytes().length : 0),
+  ].join('\n');
+}
+
 function saveProjectToSupabase_(options) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
     Logger.log('saveProjectToSupabase_ skipped: missing Supabase config');
-    return;
+    return null;
   }
 
   const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/projects';
@@ -750,7 +1066,7 @@ function saveProjectToSupabase_(options) {
       headers: {
         apikey: SUPABASE_KEY,
         Authorization: 'Bearer ' + SUPABASE_KEY,
-        Prefer: 'return=minimal',
+        Prefer: 'return=representation',
       },
       payload: JSON.stringify(payload),
       muteHttpExceptions: true,
@@ -763,11 +1079,198 @@ function saveProjectToSupabase_(options) {
 
     if (statusCode < 200 || statusCode >= 300) {
       Logger.log('saveProjectToSupabase_ response: ' + body);
+      return null;
     }
+
+    const rows = JSON.parse(body || '[]');
+    if (Array.isArray(rows) && rows.length > 0) {
+      return rows[0];
+    }
+
+    return rows || null;
   } catch (error) {
     Logger.log('saveProjectToSupabase_ error: ' + error.message);
     Logger.log('saveProjectToSupabase_ error stack: ' + error.stack);
+    return null;
   }
+}
+
+function saveProjectItemsToSupabase_(projectId, geminiResult, options) {
+  if (!projectId || !SUPABASE_URL || !SUPABASE_KEY) {
+    return;
+  }
+
+  const items = buildSupabaseProjectItemsPayloads_(
+    projectId,
+    geminiResult,
+    options
+  );
+
+  if (!items.length) {
+    Logger.log('saveProjectItemsToSupabase_ skipped: no items');
+    return;
+  }
+
+  const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/project_items';
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+        Prefer: 'return=minimal',
+      },
+      payload: JSON.stringify(items),
+      muteHttpExceptions: true,
+    });
+
+    const statusCode = response.getResponseCode();
+    Logger.log('saveProjectItemsToSupabase_ status: ' + statusCode);
+
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log(
+        'saveProjectItemsToSupabase_ response: ' + response.getContentText()
+      );
+    }
+  } catch (error) {
+    Logger.log('saveProjectItemsToSupabase_ error: ' + error.message);
+    Logger.log('saveProjectItemsToSupabase_ error stack: ' + error.stack);
+  }
+}
+
+function updateSupabaseProjectLedgerIdByImageLedger_(imageLedgerRow, ledgerId) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    Logger.log(
+      'updateSupabaseProjectLedgerIdByImageLedger_ skipped: missing Supabase config'
+    );
+    return;
+  }
+
+  const normalizedLedgerId = String(ledgerId || '').trim();
+  const drawingUrl = String(
+    imageLedgerRow[COLUMNS.IMAGE_LEDGER.DRAWING_URL] || ''
+  ).trim();
+  const originalFileName = String(
+    imageLedgerRow[COLUMNS.IMAGE_LEDGER.ORIGINAL_FILE_NAME] || ''
+  ).trim();
+
+  if (!normalizedLedgerId) {
+    throw new Error('ledgerId が指定されていません');
+  }
+
+  const query = buildSupabaseProjectUpdateQuery_(drawingUrl, originalFileName);
+
+  if (!query) {
+    Logger.log(
+      'updateSupabaseProjectLedgerIdByImageLedger_ skipped: no match query'
+    );
+    return;
+  }
+
+  const url =
+    SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/projects?' + query;
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'patch',
+      contentType: 'application/json',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+        Prefer: 'return=minimal',
+      },
+      payload: JSON.stringify({
+        ledger_id: normalizedLedgerId,
+        updated_at: new Date().toISOString(),
+      }),
+      muteHttpExceptions: true,
+    });
+
+    const statusCode = response.getResponseCode();
+    Logger.log(
+      'updateSupabaseProjectLedgerIdByImageLedger_ status: ' + statusCode
+    );
+
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log(
+        'updateSupabaseProjectLedgerIdByImageLedger_ response: ' +
+          response.getContentText()
+      );
+    }
+  } catch (error) {
+    Logger.log(
+      'updateSupabaseProjectLedgerIdByImageLedger_ error: ' + error.message
+    );
+    Logger.log(
+      'updateSupabaseProjectLedgerIdByImageLedger_ error stack: ' + error.stack
+    );
+  }
+}
+
+function buildSupabaseProjectUpdateQuery_(drawingUrl, originalFileName) {
+  if (drawingUrl) {
+    return 'saved_image_url=eq.' + encodeURIComponent(drawingUrl);
+  }
+
+  if (originalFileName) {
+    return 'original_file_name=eq.' + encodeURIComponent(originalFileName);
+  }
+
+  return '';
+}
+
+function buildSupabaseProjectItemsPayloads_(projectId, geminiResult, options) {
+  const normalizedItems = normalizeSupabaseProjectItems_(
+    geminiResult,
+    options
+  );
+
+  return normalizedItems.map(function (item, index) {
+    return {
+      project_id: projectId,
+      item_no: index + 1,
+      item_name: item.item_name || null,
+      drawing_number: item.drawing_number || null,
+      processing: item.processing || null,
+      material: item.material || null,
+      size_text: item.size_thickness || null,
+      quantity: parseSupabaseDecimalOrNull_(item.quantity),
+      unit_price: parseSupabaseAmount_(item.unit_price),
+      amount: parseSupabaseAmount_(item.amount),
+      due_date: parseSupabaseDueDate_(item.due_date || options?.parentDueDate),
+      note: item.note || null,
+      ai_extracted_json: item,
+    };
+  });
+}
+
+function normalizeSupabaseProjectItems_(geminiResult, options) {
+  const items = Array.isArray(geminiResult?.items) ? geminiResult.items : [];
+
+  if (items.length > 0) {
+    return items;
+  }
+
+  const fallbackItem = {
+    item_name: geminiResult?.project_name || '',
+    drawing_number: geminiResult?.drawing_number || '',
+    processing: geminiResult?.processing || '',
+    material: geminiResult?.material || '',
+    size_thickness: geminiResult?.size_thickness || '',
+    quantity: geminiResult?.quantity || '',
+    unit_price: '',
+    amount: '',
+    due_date: geminiResult?.desired_due_date || options?.parentDueDate || '',
+    note: geminiResult?.notes || '',
+  };
+
+  const hasValue = Object.keys(fallbackItem).some(function (key) {
+    return Boolean(fallbackItem[key]);
+  });
+
+  return hasValue ? [fallbackItem] : [];
 }
 
 function getLineUserState_(lineUserId) {
@@ -1004,11 +1507,21 @@ function buildSupabasePublicFileUrl_(bucketName, objectPath) {
 function buildSupabaseProjectPayload_(options) {
   const result = options.geminiResult || {};
   const ledgerRow = options.ledgerRow || {};
+  const flowType = options.flowType || inferSupabaseFlowType_(options);
+  const drawingUrl = options.drawingUrl || ledgerRow.drawingUrl || '';
+  const aiExtractedJson =
+    options.aiExtractedJson ||
+    ledgerRow.rawJson ||
+    safeStringify_(result);
 
   return {
+    flow_type: flowType,
     source_type: normalizeSupabaseSourceType_(ledgerRow.source),
     received_at: toIsoStringOrNull_(ledgerRow.receivedAt),
     status: normalizeSupabaseStatus_(ledgerRow.status),
+    project_code: options.projectCode || null,
+    quote_no: result.quote_no || options.quoteNo || null,
+    project_type: options.projectType || ledgerRow.projectType || null,
     customer_name: ledgerRow.customerName || '',
     contact_name: ledgerRow.contactName || '',
     project_name: result.project_name || '',
@@ -1017,12 +1530,44 @@ function buildSupabaseProjectPayload_(options) {
     size_text: ledgerRow.sizeThickness || '',
     quantity: parseSupabaseQuantity_(ledgerRow.quantity),
     due_date: parseSupabaseDueDate_(ledgerRow.dueDate),
+    total_amount: parseSupabaseAmount_(result.total_amount || options.totalAmount),
     current_response_note: '',
     note: ledgerRow.notes || '',
     ai_summary: '',
+    original_file_name:
+      options.originalFileName || ledgerRow.originalFileName || null,
+    original_image_url:
+      options.originalImageUrl || ledgerRow.originalImageUrl || null,
+    saved_image_url: options.savedImageUrl || drawingUrl || null,
+    drawing_url: drawingUrl || null,
+    ocr_text: options.ocrText || null,
+    ai_extracted_json: parseSupabaseJsonOrNull_(aiExtractedJson),
+    validation_result: options.validationResult || null,
+    processing_status: options.processingStatus || null,
+    error_message: options.errorMessage || null,
+    ledger_id: options.ledgerId || ledgerRow.ledgerId || null,
     line_user_id: options.lineUserId || '',
     spreadsheet_row_no: null,
   };
+}
+
+function inferSupabaseFlowType_(options) {
+  if (options.flowType) return options.flowType;
+
+  if (
+    options.projectType ||
+    options.originalFileName ||
+    options.originalImageUrl ||
+    options.savedImageUrl ||
+    options.ocrText ||
+    options.validationResult ||
+    options.processingStatus ||
+    options.errorMessage
+  ) {
+    return 'image';
+  }
+
+  return 'normal';
 }
 
 function normalizeSupabaseSourceType_(source) {
@@ -1056,11 +1601,11 @@ function toIsoStringOrNull_(value) {
 
 function parseSupabaseQuantity_(value) {
   const text = (value || '').toString();
-  const match = text.match(/\d+/);
+  const match = text.match(/\d+(?:\.\d+)?/);
 
   if (!match) return null;
 
-  const quantity = parseInt(match[0], 10);
+  const quantity = parseFloat(match[0]);
   return isNaN(quantity) ? null : quantity;
 }
 
@@ -1069,13 +1614,65 @@ function parseSupabaseDueDate_(value) {
 
   if (!text) return null;
 
-  const normalized = text.replace(/\//g, '-');
+  const normalized = text.replace(/まで|迄|期限|納期|希望/gi, '').trim();
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-    return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return normalized;
   }
 
-  return normalized;
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(normalized)) {
+    return normalized.replace(/\//g, '-');
+  }
+
+  const monthDayMatch = normalized.match(/^(\d{1,2})[\/-](\d{1,2})$/);
+  if (monthDayMatch) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = padSupabaseDatePart_(monthDayMatch[1]);
+    const day = padSupabaseDatePart_(monthDayMatch[2]);
+    return year + '-' + month + '-' + day;
+  }
+
+  return null;
+}
+
+function parseSupabaseJsonOrNull_(value) {
+  if (!value) return null;
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(String(value));
+  } catch (error) {
+    Logger.log('parseSupabaseJsonOrNull_ error: ' + error.message);
+    return null;
+  }
+}
+
+function parseSupabaseAmount_(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  const text = String(value).replace(/[^0-9.\-]/g, '');
+  if (!text) return null;
+
+  const amount = parseFloat(text);
+  return isNaN(amount) ? null : amount;
+}
+
+function parseSupabaseDecimalOrNull_(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  const text = String(value).replace(/[^0-9.\-]/g, '');
+  if (!text) return null;
+
+  const decimal = parseFloat(text);
+  return isNaN(decimal) ? null : decimal;
+}
+
+function padSupabaseDatePart_(value) {
+  return ('0' + String(value)).slice(-2);
 }
 
 function testSaveLineGeminiResultToSheets() {
