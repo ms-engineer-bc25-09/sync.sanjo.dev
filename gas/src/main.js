@@ -1859,6 +1859,14 @@ function syncSupabaseProjectsFromLedger_(options) {
       return;
     }
 
+    if (shouldSkipLedgerSyncRow_(ledgerRow)) {
+      skipped += 1;
+      Logger.log(
+        'syncSupabaseProjectsFromLedger_ skipped invalid row: ledgerId=' + ledgerId
+      );
+      return;
+    }
+
     if (targetLedgerId && ledgerId !== targetLedgerId) {
       return;
     }
@@ -2174,6 +2182,16 @@ function upsertSupabaseProjectByLedgerSync_(projectId, ledgerId, payload) {
     const body = response.getContentText();
 
     Logger.log('upsertSupabaseProjectByLedgerSync_ status: ' + statusCode);
+    Logger.log(
+      'upsertSupabaseProjectByLedgerSync_ body: ' +
+        (body ? body : '[empty]') +
+        ' projectId=' +
+        normalizedProjectId +
+        ' ledgerId=' +
+        normalizedLedgerId +
+        ' method=' +
+        method
+    );
 
     if (statusCode < 200 || statusCode >= 300) {
       Logger.log('upsertSupabaseProjectByLedgerSync_ response: ' + body);
@@ -2186,7 +2204,8 @@ function upsertSupabaseProjectByLedgerSync_(projectId, ledgerId, payload) {
     }
 
     if (isUpdate && normalizedLedgerId) {
-      const existingProjectId = normalizedProjectId || findSupabaseProjectIdByLedgerId_(normalizedLedgerId);
+      const existingProjectId =
+        findSupabaseProjectIdByLedgerId_(normalizedLedgerId) || normalizedProjectId;
       if (existingProjectId) {
         return { id: existingProjectId };
       }
@@ -2196,13 +2215,60 @@ function upsertSupabaseProjectByLedgerSync_(projectId, ledgerId, payload) {
           normalizedLedgerId
       );
 
-      return upsertSupabaseProjectByLedgerSync_('', '', payload);
+      return insertSupabaseProjectByLedgerSync_(payload);
     }
 
     return null;
   } catch (error) {
     Logger.log('upsertSupabaseProjectByLedgerSync_ error: ' + error.message);
     Logger.log('upsertSupabaseProjectByLedgerSync_ error stack: ' + error.stack);
+    return null;
+  }
+}
+
+function insertSupabaseProjectByLedgerSync_(payload) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    Logger.log('insertSupabaseProjectByLedgerSync_ skipped: missing Supabase config');
+    return null;
+  }
+
+  const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/projects';
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+        Prefer: 'return=representation',
+      },
+      payload: JSON.stringify(
+        Object.assign({}, payload, {
+          updated_at: new Date().toISOString(),
+        })
+      ),
+      muteHttpExceptions: true,
+    });
+    const statusCode = response.getResponseCode();
+    const body = response.getContentText();
+
+    Logger.log('insertSupabaseProjectByLedgerSync_ status: ' + statusCode);
+    Logger.log(
+      'insertSupabaseProjectByLedgerSync_ body: ' + (body ? body : '[empty]')
+    );
+
+    if (statusCode < 200 || statusCode >= 300) {
+      return null;
+    }
+
+    const rows = JSON.parse(body || '[]');
+    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  } catch (error) {
+    Logger.log('insertSupabaseProjectByLedgerSync_ error: ' + error.message);
+    Logger.log(
+      'insertSupabaseProjectByLedgerSync_ error stack: ' + error.stack
+    );
     return null;
   }
 }
@@ -2251,6 +2317,27 @@ function syncSupabaseProjectFromLedgerById(ledgerId) {
   return syncSupabaseProjectsFromLedger_({ ledgerId: ledgerId });
 }
 
+function shouldSkipLedgerSyncRow_(ledgerSheetRow) {
+  const source = String(ledgerSheetRow[COLUMNS.LEDGER.SOURCE] || '').trim();
+  const inquiry = String(ledgerSheetRow[COLUMNS.LEDGER.INQUIRY] || '').trim();
+  const customerName = String(
+    ledgerSheetRow[COLUMNS.LEDGER.CUSTOMER_NAME] || ''
+  ).trim();
+  const drawingUrl = String(ledgerSheetRow[COLUMNS.LEDGER.DRAWING_URL] || '').trim();
+  const quantity = String(ledgerSheetRow[COLUMNS.LEDGER.QUANTITY] || '').trim();
+  const material = String(ledgerSheetRow[COLUMNS.LEDGER.MATERIAL] || '').trim();
+
+  if (source !== 'Tally') {
+    return false;
+  }
+
+  if (customerName || drawingUrl || quantity || material) {
+    return false;
+  }
+
+  return inquiry.indexOf('Tally画像フォームを受信') === 0;
+}
+
 function toIsoStringOrNull_(value) {
   if (!value) return null;
 
@@ -2263,7 +2350,7 @@ function toIsoStringOrNull_(value) {
 }
 
 function parseSupabaseQuantity_(value) {
-  const text = (value || '').toString();
+  const text = normalizeSupabaseText_(value);
   const match = text.match(/\d+(?:\.\d+)?/);
 
   if (!match) return null;
@@ -2273,11 +2360,32 @@ function parseSupabaseQuantity_(value) {
 }
 
 function parseSupabaseDueDate_(value) {
-  const text = (value || '').trim();
+  const text = normalizeSupabaseText_(value);
 
   if (!text) return null;
 
-  const normalized = text.replace(/まで|迄|期限|納期|希望/gi, '').trim();
+  const normalized = text
+    .replace(/まで|迄|期限|納期|希望|納品/gi, '')
+    .replace(/\([^)]*\)/g, '')
+    .trim();
+
+  const now = new Date();
+
+  if (normalized === '今日') {
+    return Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy-MM-dd');
+  }
+
+  if (normalized === '明日') {
+    const tomorrow = new Date(now.getTime());
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return Utilities.formatDate(tomorrow, 'Asia/Tokyo', 'yyyy-MM-dd');
+  }
+
+  if (normalized === '明後日') {
+    const dayAfterTomorrow = new Date(now.getTime());
+    dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+    return Utilities.formatDate(dayAfterTomorrow, 'Asia/Tokyo', 'yyyy-MM-dd');
+  }
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
     return normalized;
@@ -2289,7 +2397,6 @@ function parseSupabaseDueDate_(value) {
 
   const monthDayMatch = normalized.match(/^(\d{1,2})[\/-](\d{1,2})$/);
   if (monthDayMatch) {
-    const now = new Date();
     const year = now.getFullYear();
     const month = padSupabaseDatePart_(monthDayMatch[1]);
     const day = padSupabaseDatePart_(monthDayMatch[2]);
@@ -2297,6 +2404,15 @@ function parseSupabaseDueDate_(value) {
   }
 
   return null;
+}
+
+function normalizeSupabaseText_(value) {
+  return String(value || '')
+    .replace(/[０-９]/g, function (char) {
+      return String.fromCharCode(char.charCodeAt(0) - 65248);
+    })
+    .replace(/[．]/g, '.')
+    .trim();
 }
 
 function parseSupabaseJsonOrNull_(value) {

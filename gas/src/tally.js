@@ -38,6 +38,13 @@ function handleTally_(data) {
   Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
   Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
 
+  if (isEmptyTallySubmission_(answers, freeText, parsed)) {
+    Logger.log('handleTally_ skipped: empty submission');
+    return ContentService.createTextOutput(
+      JSON.stringify({ ok: true, skipped: 'empty_tally_submission' })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+
   const structuredResult = buildTallyStructuredResult_(answers, parsed);
   const structuredJson = safeStringify_(structuredResult);
 
@@ -416,6 +423,32 @@ function normalizeTallyAnswers_(payload) {
 
 function buildTallyStructuredResult_(answers, parsed) {
   return mergeTallyAnswersIntoGeminiResult_({}, answers, parsed);
+}
+
+function isEmptyTallySubmission_(answers, freeText, parsed) {
+  const values = [
+    answers.companyName,
+    answers.contactName,
+    answers.email,
+    answers.phone,
+    answers.inquiry,
+    answers.dueDate,
+    answers.material,
+    answers.sizeThickness,
+    answers.quantity,
+    answers.notes,
+    answers.fileUrl,
+    freeText,
+    parsed.project_name,
+    parsed.due_date,
+    parsed.material,
+    parsed.quantity,
+    parsed.notes,
+  ];
+
+  return !values.some(function (value) {
+    return hasTallyValue_(value);
+  });
 }
 
 function getTallyFreeText_(fields) {
