@@ -7,7 +7,6 @@ function handleTally_(data) {
   const fields = data?.data?.fields || data?.fields || [];
   const freeText = getTallyFreeText_(fields);
   const parsed = parseFreeText_(freeText);
-  const rawJson = JSON.stringify(data);
 
   answers.inquiry = answers.inquiry || parsed.project_name || '';
   answers.dueDate = answers.dueDate || parsed.due_date || '';
@@ -38,6 +37,9 @@ function handleTally_(data) {
 
   Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
   Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
+
+  const structuredResult = buildTallyStructuredResult_(answers, parsed);
+  const structuredJson = safeStringify_(structuredResult);
 
   if (drawingUrl) {
     const imageData = uploadedImageData || fetchImageFromUrl_(drawingUrl);
@@ -136,52 +138,59 @@ function handleTally_(data) {
     ).setMimeType(ContentService.MimeType.JSON);
   }
 
-  appendInternalLogRow_({
-    id: '',
-    createdAt: now,
+  const rawText = buildTallyImageRawText_(answers, freeText, '');
+  const ledgerRow = buildLedgerRowFromGeminiResult_({
+    geminiResult: structuredResult,
+    receivedAt: now,
+    rawText: rawText,
     source: 'Tally',
-    status: '未対応',
-    customerName: answers.companyName,
-    contactName: answers.contactName,
-    projectName: answers.inquiry,
-    drawingNumber: '',
-    material: answers.material,
-    size: answers.sizeThickness,
-    quantity: answers.quantity,
-    dueDate: answers.dueDate,
-    notes: answers.notes,
-    rawText: answers.inquiry,
-    lineUserId: '',
-    aiExtractedJson: rawJson,
-    similarCase: '',
-    pastUnitPrice: '',
-    suggestedPrice: '',
-    spreadsheetUpdatedAt: now,
+    status: 'AI登録済',
+    drawingUrl: '',
   });
+
+  ledgerRow.email = answers.email || '';
+  ledgerRow.phone = answers.phone || '';
+  ledgerRow.rawJson = structuredJson;
+
+  const ledgerId = createLedgerEntry_(ledgerRow);
+  const internalLogRow = buildInternalLogRowFromGeminiResult_({
+    geminiResult: structuredResult,
+    ledgerRow: Object.assign({}, ledgerRow, {
+      id: ledgerId,
+    }),
+    rawText: rawText,
+    lineUserId: '',
+  });
+
+  appendInternalLogRow_(internalLogRow);
 
   Logger.log('handleTally_ internal log appended');
 
-  appendLedgerRow_({
-    receivedAt: now,
-    status: '未対応',
-    source: 'Tally',
-    customerName: answers.companyName,
-    contactName: answers.contactName,
-    email: answers.email,
-    phone: answers.phone,
-    inquiry: answers.inquiry,
-    dueDate: answers.dueDate,
-    material: answers.material,
-    sizeThickness: answers.sizeThickness,
-    quantity: answers.quantity,
-    notes: answers.notes,
-    drawingUrl: drawingUrl,
-    rawJson: rawJson,
+  const savedProject = saveProjectToSupabase_({
+    geminiResult: structuredResult,
+    ledgerRow: Object.assign({}, ledgerRow, {
+      projectType: 'Web見積依頼',
+      ledgerId: ledgerId,
+    }),
+    flowType: 'normal',
+    projectType: 'Web見積依頼',
+    aiExtractedJson: structuredJson,
+    validationResult: '必要時確認',
+    processingStatus: '案件台帳登録済',
+    errorMessage: '',
+    ledgerId: ledgerId,
+    lineUserId: '',
   });
+
+  if (savedProject && savedProject.id) {
+    saveProjectItemsToSupabase_(savedProject.id, structuredResult, {
+      parentDueDate: ledgerRow.dueDate,
+    });
+  }
 
   Logger.log('handleTally_ ledger appended');
 
-  notifyTallyInquiry_(answers);
+  notifyTallyInquiry_(buildTallyNotificationAnswers_(answers, structuredResult));
   Logger.log('handleTally_ notify finished');
 
   return ContentService.createTextOutput(
@@ -403,6 +412,10 @@ function normalizeTallyAnswers_(payload) {
   }
 
   return result;
+}
+
+function buildTallyStructuredResult_(answers, parsed) {
+  return mergeTallyAnswersIntoGeminiResult_({}, answers, parsed);
 }
 
 function getTallyFreeText_(fields) {

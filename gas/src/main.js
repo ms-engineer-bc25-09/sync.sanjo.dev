@@ -138,6 +138,7 @@ function handleLineTextMessage_(event) {
   const lineUserId = event.source?.userId || '';
   const replyToken = event.replyToken || '';
   const text = (event.message?.text || '').trim();
+  const now = new Date();
 
   Logger.log('handleLineTextMessage_ start');
   Logger.log('lineUserId: ' + lineUserId);
@@ -156,8 +157,15 @@ function handleLineTextMessage_(event) {
   }
 
   const lineUserState = getLineUserState_(lineUserId);
+  const isRegistrationText = isStructuredRegistrationText_(text);
+
+  if (isRegistrationText && lineUserState) {
+    clearLineUserState_(lineUserId);
+  }
+
   if (
     lineUserState &&
+    !isRegistrationText &&
     (lineUserState.mode === 'search_waiting_type' ||
       lineUserState.mode === 'search_waiting_value')
   ) {
@@ -226,13 +234,22 @@ function handleLineTextMessage_(event) {
     return;
   }
 
-  saveLineGeminiResultToSheets_({
+  const ledgerRow = buildLedgerRowFromGeminiResult_({
     geminiResult: parsedResult,
+    receivedAt: now,
+    rawText: text,
     source: 'LINE',
-    status: '未対応',
+    status: 'AI登録済',
+    drawingUrl: '',
+  });
+  const ledgerId = createLedgerEntry_(ledgerRow);
+  const internalLogRow = buildInternalLogRowFromGeminiResult_({
+    geminiResult: parsedResult,
+    ledgerRow: Object.assign({}, ledgerRow, {
+      id: ledgerId,
+    }),
     rawText: text,
     lineUserId: lineUserId,
-    drawingUrl: '',
   });
 
   if (replyToken) {
@@ -245,6 +262,8 @@ function handleLineTextMessage_(event) {
       },
     ]);
   }
+
+  appendInternalLogRow_(internalLogRow);
 }
 
 function buildRichMenuGuideReply_(text) {
@@ -1024,8 +1043,20 @@ function handleSupabaseImageWebhook_(data) {
     throw new Error('Supabase webhook payload に画像URLがありません');
   }
 
-  const imageData = fetchImageFromUrl_(imageUrl);
-  const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
+  const storedAiResult = parseSupabaseJsonOrNull_(record.ai_extracted_json);
+  let imageData = {
+    blob: null,
+    mimeType: '',
+    base64: '',
+    fileName: record.original_file_name || inferFileNameFromUrl_(imageUrl),
+  };
+  let geminiResult = storedAiResult;
+
+  if (!geminiResult) {
+    imageData = fetchImageFromUrl_(imageUrl);
+    geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
+  }
+
   const receivedAt = parseDateValue_(record.received_at) || new Date();
   const rawText = buildSupabaseImageWebhookRawText_(record, imageData, imageUrl);
   const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
@@ -1056,8 +1087,7 @@ function handleSupabaseImageWebhook_(data) {
       record.validation_result || (record.ledger_id ? '必要時確認' : '未確認'),
     errorMessage: record.error_message || '',
     ocrText: record.ocr_text || '',
-    aiExtractedJson:
-      safeStringify_(geminiResult) || safeStringify_(record.ai_extracted_json),
+    aiExtractedJson: safeStringify_(geminiResult),
     notes: rawText,
     id: record.id || '',
   });
@@ -1160,6 +1190,28 @@ function fetchImageFromUrl_(fileUrl) {
     base64: Utilities.base64Encode(blob.getBytes()),
     fileName: blob.getName() || fileName || '',
   };
+}
+
+function isStructuredRegistrationText_(text) {
+  const normalized = String(text || '').trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  const labels = ['案件名', '顧客名', '材質', '数量', '希望納期'];
+  const matchedLabelCount = labels.filter(function (label) {
+    return (
+      normalized.includes(label + '：') ||
+      normalized.includes(label + ':')
+    );
+  }).length;
+
+  if (matchedLabelCount >= 2) {
+    return true;
+  }
+
+  return false;
 }
 
 function buildImageDataFromBlob_(blob, fileName) {
@@ -1477,7 +1529,14 @@ function getLineUserState_(lineUserId) {
       return null;
     }
 
-    return rows[0];
+    const state = rows[0];
+
+    if (isExpiredLineUserState_(state)) {
+      clearLineUserState_(lineUserId);
+      return null;
+    }
+
+    return state;
   } catch (error) {
     Logger.log('getLineUserState_ error: ' + error.message);
     Logger.log('getLineUserState_ error stack: ' + error.stack);
@@ -1590,6 +1649,20 @@ function uploadTallyFileToSupabase_(fileUrl, options) {
     publicUrl: publicUrl,
     fileName: inferFileNameFromUrl_(fileUrl),
   };
+}
+
+function isExpiredLineUserState_(state) {
+  if (!state || !state.updated_at) {
+    return false;
+  }
+
+  const updatedAt = new Date(state.updated_at);
+
+  if (isNaN(updatedAt.getTime())) {
+    return false;
+  }
+
+  return Date.now() - updatedAt.getTime() > 10 * 60 * 1000;
 }
 
 function uploadBlobToSupabase_(blob, options) {
