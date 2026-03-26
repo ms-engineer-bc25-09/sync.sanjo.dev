@@ -1863,8 +1863,12 @@ function syncSupabaseProjectsFromLedger_(options) {
       return;
     }
 
-    syncSingleLedgerRowToSupabase_(ledgerRow);
-    synced += 1;
+    if (syncSingleLedgerRowToSupabase_(ledgerRow)) {
+      synced += 1;
+      return;
+    }
+
+    skipped += 1;
   });
 
   Logger.log(
@@ -1930,7 +1934,7 @@ function syncSingleLedgerRowToSupabase_(ledgerSheetRow) {
 
   if (!syncedProject || !syncedProject.id) {
     Logger.log('syncSingleLedgerRowToSupabase_ skipped: project upsert failed ' + ledgerId);
-    return;
+    return false;
   }
 
   replaceSupabaseProjectItems_(syncedProject.id, mergedGeminiResult, {
@@ -1943,6 +1947,8 @@ function syncSingleLedgerRowToSupabase_(ledgerSheetRow) {
       ' projectId=' +
       syncedProject.id
   );
+
+  return true;
 }
 
 function buildLedgerPayloadFromLedgerSheetRow_(ledgerSheetRow) {
@@ -2179,13 +2185,21 @@ function upsertSupabaseProjectByLedgerSync_(projectId, ledgerId, payload) {
       return rows[0];
     }
 
-    if (normalizedProjectId) {
-      return { id: normalizedProjectId };
+    if (isUpdate && normalizedLedgerId) {
+      const existingProjectId = normalizedProjectId || findSupabaseProjectIdByLedgerId_(normalizedLedgerId);
+      if (existingProjectId) {
+        return { id: existingProjectId };
+      }
+
+      Logger.log(
+        'upsertSupabaseProjectByLedgerSync_: no existing project matched, fallback insert ledgerId=' +
+          normalizedLedgerId
+      );
+
+      return upsertSupabaseProjectByLedgerSync_('', '', payload);
     }
 
-    return normalizedLedgerId
-      ? { id: findSupabaseProjectIdByLedgerId_(normalizedLedgerId) }
-      : null;
+    return null;
   } catch (error) {
     Logger.log('upsertSupabaseProjectByLedgerSync_ error: ' + error.message);
     Logger.log('upsertSupabaseProjectByLedgerSync_ error stack: ' + error.stack);
