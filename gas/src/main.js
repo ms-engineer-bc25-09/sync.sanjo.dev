@@ -1835,6 +1835,408 @@ function normalizeSupabaseStatus_(status) {
   return 'received';
 }
 
+function syncSupabaseProjectsFromLedger_(options) {
+  const targetLedgerId = String(options?.ledgerId || '').trim();
+  const ledgerSheet = getSheetByName_(SHEET_NAMES.LEDGER);
+  const values = ledgerSheet.getDataRange().getValues();
+
+  if (!values || values.length < 2) {
+    Logger.log('syncSupabaseProjectsFromLedger_: no ledger rows');
+    return { synced: 0, skipped: 0 };
+  }
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  let synced = 0;
+  let skipped = 0;
+
+  rows.forEach(function (row) {
+    const ledgerRow = buildRowObjectFromValues_(headers, row);
+    const ledgerId = String(ledgerRow[COLUMNS.LEDGER.ID] || '').trim();
+
+    if (!ledgerId) {
+      skipped += 1;
+      return;
+    }
+
+    if (targetLedgerId && ledgerId !== targetLedgerId) {
+      return;
+    }
+
+    syncSingleLedgerRowToSupabase_(ledgerRow);
+    synced += 1;
+  });
+
+  Logger.log(
+    'syncSupabaseProjectsFromLedger_ done: synced=' +
+      synced +
+      ' skipped=' +
+      skipped +
+      (targetLedgerId ? ' ledgerId=' + targetLedgerId : '')
+  );
+
+  return { synced: synced, skipped: skipped };
+}
+
+function syncSingleLedgerRowToSupabase_(ledgerSheetRow) {
+  const ledgerId = String(ledgerSheetRow[COLUMNS.LEDGER.ID] || '').trim();
+
+  if (!ledgerId) {
+    throw new Error('案件台帳ID が空のため同期できません');
+  }
+
+  const source = String(ledgerSheetRow[COLUMNS.LEDGER.SOURCE] || '').trim();
+  const imageLedgerRow = findImageLedgerRowByLedgerId_(ledgerId);
+  const mergedGeminiResult = buildGeminiResultFromLedgerRow_(ledgerSheetRow);
+  const projectId = imageLedgerRow
+    ? String(imageLedgerRow[COLUMNS.IMAGE_LEDGER.ID] || '').trim()
+    : findSupabaseProjectIdByLedgerId_(ledgerId);
+  const projectType = inferProjectTypeForLedgerSync_(source, imageLedgerRow);
+  const flowType = imageLedgerRow ? 'image' : 'normal';
+  const ledgerPayload = buildLedgerPayloadFromLedgerSheetRow_(ledgerSheetRow);
+  const payload = buildSupabaseProjectPayload_({
+    geminiResult: mergedGeminiResult,
+    ledgerRow: Object.assign({}, ledgerPayload, {
+      ledgerId: ledgerId,
+      projectType: projectType,
+      originalFileName: imageLedgerRow
+        ? imageLedgerRow[COLUMNS.IMAGE_LEDGER.ORIGINAL_FILE_NAME] || null
+        : null,
+      originalImageUrl: imageLedgerRow
+        ? imageLedgerRow[COLUMNS.IMAGE_LEDGER.ORIGINAL_IMAGE_URL] || null
+        : null,
+    }),
+    flowType: flowType,
+    projectType: projectType,
+    originalFileName: imageLedgerRow
+      ? imageLedgerRow[COLUMNS.IMAGE_LEDGER.ORIGINAL_FILE_NAME] || null
+      : null,
+    originalImageUrl: imageLedgerRow
+      ? imageLedgerRow[COLUMNS.IMAGE_LEDGER.ORIGINAL_IMAGE_URL] || null
+      : null,
+    savedImageUrl: imageLedgerRow
+      ? imageLedgerRow[COLUMNS.IMAGE_LEDGER.DRAWING_URL] || null
+      : null,
+    drawingUrl:
+      String(ledgerSheetRow[COLUMNS.LEDGER.DRAWING_URL] || '').trim() || null,
+    aiExtractedJson: safeStringify_(mergedGeminiResult),
+    validationResult: imageLedgerRow ? '必要時確認' : null,
+    processingStatus: '案件台帳登録済',
+    errorMessage: '',
+    ledgerId: ledgerId,
+    lineUserId: findLineUserIdByLedgerId_(ledgerId),
+  });
+  const syncedProject = upsertSupabaseProjectByLedgerSync_(projectId, ledgerId, payload);
+
+  if (!syncedProject || !syncedProject.id) {
+    Logger.log('syncSingleLedgerRowToSupabase_ skipped: project upsert failed ' + ledgerId);
+    return;
+  }
+
+  replaceSupabaseProjectItems_(syncedProject.id, mergedGeminiResult, {
+    parentDueDate: ledgerPayload.dueDate,
+  });
+
+  Logger.log(
+    'syncSingleLedgerRowToSupabase_ success: ledgerId=' +
+      ledgerId +
+      ' projectId=' +
+      syncedProject.id
+  );
+}
+
+function buildLedgerPayloadFromLedgerSheetRow_(ledgerSheetRow) {
+  return {
+    id: String(ledgerSheetRow[COLUMNS.LEDGER.ID] || '').trim(),
+    receivedAt: ledgerSheetRow[COLUMNS.LEDGER.RECEIVED_AT] || new Date(),
+    status: String(ledgerSheetRow[COLUMNS.LEDGER.STATUS] || '').trim(),
+    source: String(ledgerSheetRow[COLUMNS.LEDGER.SOURCE] || '').trim(),
+    customerName: String(ledgerSheetRow[COLUMNS.LEDGER.CUSTOMER_NAME] || '').trim(),
+    contactName: String(ledgerSheetRow[COLUMNS.LEDGER.CONTACT_NAME] || '').trim(),
+    email: String(ledgerSheetRow[COLUMNS.LEDGER.EMAIL] || '').trim(),
+    phone: String(ledgerSheetRow[COLUMNS.LEDGER.PHONE] || '').trim(),
+    inquiry: String(ledgerSheetRow[COLUMNS.LEDGER.INQUIRY] || '').trim(),
+    dueDate: String(ledgerSheetRow[COLUMNS.LEDGER.DUE_DATE] || '').trim(),
+    material: String(ledgerSheetRow[COLUMNS.LEDGER.MATERIAL] || '').trim(),
+    sizeThickness: String(
+      ledgerSheetRow[COLUMNS.LEDGER.SIZE_THICKNESS] || ''
+    ).trim(),
+    quantity: String(ledgerSheetRow[COLUMNS.LEDGER.QUANTITY] || '').trim(),
+    notes: String(ledgerSheetRow[COLUMNS.LEDGER.NOTES] || '').trim(),
+    drawingUrl: String(ledgerSheetRow[COLUMNS.LEDGER.DRAWING_URL] || '').trim(),
+    rawJson: String(ledgerSheetRow[COLUMNS.LEDGER.RAW_JSON] || '').trim(),
+  };
+}
+
+function buildGeminiResultFromLedgerRow_(ledgerSheetRow) {
+  const rawJson = String(ledgerSheetRow[COLUMNS.LEDGER.RAW_JSON] || '').trim();
+  const parsed = parseSupabaseJsonOrNull_(rawJson) || {};
+  const result = Object.assign({}, parsed);
+  const items = Array.isArray(parsed.items) ? parsed.items.slice() : [];
+
+  result.customer_name = String(
+    ledgerSheetRow[COLUMNS.LEDGER.CUSTOMER_NAME] || parsed.customer_name || ''
+  ).trim();
+  result.contact_name = String(
+    ledgerSheetRow[COLUMNS.LEDGER.CONTACT_NAME] || parsed.contact_name || ''
+  ).trim();
+  result.project_name = String(
+    ledgerSheetRow[COLUMNS.LEDGER.INQUIRY] || parsed.project_name || ''
+  ).trim();
+  result.material = String(
+    ledgerSheetRow[COLUMNS.LEDGER.MATERIAL] || parsed.material || ''
+  ).trim();
+  result.size_thickness = String(
+    ledgerSheetRow[COLUMNS.LEDGER.SIZE_THICKNESS] || parsed.size_thickness || ''
+  ).trim();
+  result.quantity = String(
+    ledgerSheetRow[COLUMNS.LEDGER.QUANTITY] || parsed.quantity || ''
+  ).trim();
+  result.desired_due_date = String(
+    ledgerSheetRow[COLUMNS.LEDGER.DUE_DATE] || parsed.desired_due_date || ''
+  ).trim();
+  result.notes = String(
+    ledgerSheetRow[COLUMNS.LEDGER.NOTES] || parsed.notes || ''
+  ).trim();
+
+  if (!result.project_name && items.length > 0) {
+    result.project_name = String(items[0].item_name || '').trim();
+  }
+
+  result.items = items;
+
+  return result;
+}
+
+function findImageLedgerRowByLedgerId_(ledgerId) {
+  const normalizedLedgerId = String(ledgerId || '').trim();
+
+  if (!normalizedLedgerId) {
+    return null;
+  }
+
+  const sheet = getSheetByName_(SHEET_NAMES.IMAGE_LEDGER);
+  const values = sheet.getDataRange().getValues();
+
+  if (!values || values.length < 2) {
+    return null;
+  }
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const indexMap = buildHeaderIndexMap_(headers);
+
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const candidateLedgerId = String(
+      getCellValueByHeader_(rows[i], indexMap, COLUMNS.IMAGE_LEDGER.LEDGER_ID) || ''
+    ).trim();
+
+    if (candidateLedgerId === normalizedLedgerId) {
+      return buildRowObjectFromValues_(headers, rows[i]);
+    }
+  }
+
+  return null;
+}
+
+function findLineUserIdByLedgerId_(ledgerId) {
+  const normalizedLedgerId = String(ledgerId || '').trim();
+
+  if (!normalizedLedgerId) {
+    return '';
+  }
+
+  const sheet = getSheetByName_(SHEET_NAMES.INTERNAL_LOG);
+  const values = sheet.getDataRange().getValues();
+
+  if (!values || values.length < 2) {
+    return '';
+  }
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const indexMap = buildHeaderIndexMap_(headers);
+
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    const candidateLedgerId = String(getCellValueByHeader_(row, indexMap, COLUMNS.INTERNAL_LOG.ID) || '').trim();
+    const rawJson = String(getCellValueByHeader_(row, indexMap, COLUMNS.INTERNAL_LOG.AI_EXTRACTED_JSON) || '').trim();
+    const rowLineUserId = String(getCellValueByHeader_(row, indexMap, COLUMNS.INTERNAL_LOG.LINE_USER_ID) || '').trim();
+
+    if (candidateLedgerId && candidateLedgerId === normalizedLedgerId && rowLineUserId) {
+      return rowLineUserId;
+    }
+
+    if (!candidateLedgerId && rawJson) {
+      const parsed = parseSupabaseJsonOrNull_(rawJson);
+      if (parsed && String(parsed.ledger_id || '').trim() === normalizedLedgerId && rowLineUserId) {
+        return rowLineUserId;
+      }
+    }
+  }
+
+  return '';
+}
+
+function inferProjectTypeForLedgerSync_(source, imageLedgerRow) {
+  if (imageLedgerRow) {
+    return (
+      String(imageLedgerRow[COLUMNS.IMAGE_LEDGER.PROJECT_TYPE] || '').trim() ||
+      '受付メモ'
+    );
+  }
+
+  if (String(source || '').trim() === 'Tally') {
+    return 'Web見積依頼';
+  }
+
+  return '受付メモ';
+}
+
+function findSupabaseProjectIdByLedgerId_(ledgerId) {
+  if (!ledgerId || !SUPABASE_URL || !SUPABASE_KEY) {
+    return '';
+  }
+
+  const url =
+    SUPABASE_URL.replace(/\/$/, '') +
+    '/rest/v1/projects?ledger_id=eq.' +
+    encodeURIComponent(ledgerId) +
+    '&select=id&limit=1';
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+      },
+      muteHttpExceptions: true,
+    });
+    const statusCode = response.getResponseCode();
+
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log('findSupabaseProjectIdByLedgerId_ status: ' + statusCode);
+      Logger.log('findSupabaseProjectIdByLedgerId_ response: ' + response.getContentText());
+      return '';
+    }
+
+    const rows = JSON.parse(response.getContentText() || '[]');
+    return Array.isArray(rows) && rows.length > 0 ? String(rows[0].id || '').trim() : '';
+  } catch (error) {
+    Logger.log('findSupabaseProjectIdByLedgerId_ error: ' + error.message);
+    Logger.log('findSupabaseProjectIdByLedgerId_ error stack: ' + error.stack);
+    return '';
+  }
+}
+
+function upsertSupabaseProjectByLedgerSync_(projectId, ledgerId, payload) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    Logger.log('upsertSupabaseProjectByLedgerSync_ skipped: missing Supabase config');
+    return null;
+  }
+
+  const normalizedProjectId = String(projectId || '').trim();
+  const normalizedLedgerId = String(ledgerId || '').trim();
+  const isUpdate = Boolean(normalizedProjectId || normalizedLedgerId);
+  const query = normalizedProjectId
+    ? 'id=eq.' + encodeURIComponent(normalizedProjectId)
+    : 'ledger_id=eq.' + encodeURIComponent(normalizedLedgerId);
+  const url =
+    SUPABASE_URL.replace(/\/$/, '') +
+    '/rest/v1/projects' +
+    (isUpdate ? '?' + query : '');
+  const method = isUpdate ? 'patch' : 'post';
+
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: method,
+      contentType: 'application/json',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+        Prefer: 'return=representation',
+      },
+      payload: JSON.stringify(
+        Object.assign({}, payload, {
+          updated_at: new Date().toISOString(),
+        })
+      ),
+      muteHttpExceptions: true,
+    });
+    const statusCode = response.getResponseCode();
+    const body = response.getContentText();
+
+    Logger.log('upsertSupabaseProjectByLedgerSync_ status: ' + statusCode);
+
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log('upsertSupabaseProjectByLedgerSync_ response: ' + body);
+      return null;
+    }
+
+    const rows = JSON.parse(body || '[]');
+    if (Array.isArray(rows) && rows.length > 0) {
+      return rows[0];
+    }
+
+    if (normalizedProjectId) {
+      return { id: normalizedProjectId };
+    }
+
+    return normalizedLedgerId
+      ? { id: findSupabaseProjectIdByLedgerId_(normalizedLedgerId) }
+      : null;
+  } catch (error) {
+    Logger.log('upsertSupabaseProjectByLedgerSync_ error: ' + error.message);
+    Logger.log('upsertSupabaseProjectByLedgerSync_ error stack: ' + error.stack);
+    return null;
+  }
+}
+
+function replaceSupabaseProjectItems_(projectId, geminiResult, options) {
+  if (!projectId || !SUPABASE_URL || !SUPABASE_KEY) {
+    return;
+  }
+
+  const deleteUrl =
+    SUPABASE_URL.replace(/\/$/, '') +
+    '/rest/v1/project_items?project_id=eq.' +
+    encodeURIComponent(projectId);
+
+  try {
+    const deleteResponse = UrlFetchApp.fetch(deleteUrl, {
+      method: 'delete',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: 'Bearer ' + SUPABASE_KEY,
+        Prefer: 'return=minimal',
+      },
+      muteHttpExceptions: true,
+    });
+    const statusCode = deleteResponse.getResponseCode();
+    Logger.log('replaceSupabaseProjectItems_ delete status: ' + statusCode);
+
+    if (statusCode < 200 || statusCode >= 300) {
+      Logger.log('replaceSupabaseProjectItems_ delete response: ' + deleteResponse.getContentText());
+      return;
+    }
+  } catch (error) {
+    Logger.log('replaceSupabaseProjectItems_ delete error: ' + error.message);
+    Logger.log('replaceSupabaseProjectItems_ delete error stack: ' + error.stack);
+    return;
+  }
+
+  saveProjectItemsToSupabase_(projectId, geminiResult, options);
+}
+
+function syncSupabaseProjectsFromLedger() {
+  return syncSupabaseProjectsFromLedger_({});
+}
+
+function syncSupabaseProjectFromLedgerById(ledgerId) {
+  return syncSupabaseProjectsFromLedger_({ ledgerId: ledgerId });
+}
+
 function toIsoStringOrNull_(value) {
   if (!value) return null;
 
