@@ -117,6 +117,18 @@ function appendLedgerRow_(data) {
   forceWriteLedgerSizeThicknessToLastRow_(sizeThicknessValue);
 }
 
+function createLedgerEntry_(data) {
+  const ledgerId = String(data.id || '').trim() || Utilities.getUuid();
+
+  appendLedgerRow_(
+    Object.assign({}, data, {
+      id: ledgerId,
+    })
+  );
+
+  return ledgerId;
+}
+
 function appendImageLedgerRow_(data) {
   const rowObject = {};
 
@@ -658,7 +670,7 @@ function saveLineGeminiResultToSheets_(params) {
     spreadsheetUpdatedAt: now,
   });
 
-  appendLedgerRow_({
+  const ledgerId = createLedgerEntry_({
     receivedAt: now,
     status: status,
     source: source,
@@ -681,6 +693,7 @@ function saveLineGeminiResultToSheets_(params) {
   });
 
   Logger.log('saveLineGeminiResultToSheets_ success');
+  return ledgerId;
 }
 
 function findLatestInternalLogByLineUserId_(lineUserId) {

@@ -24,6 +24,7 @@ function handleTally_(data) {
     try {
       drawingUrl = uploadTallyFileToSupabase_(answers.fileUrl, {
         receivedAt: now,
+        source: 'tally',
       });
       Logger.log('handleTally_ uploaded file to supabase: ' + drawingUrl);
     } catch (error) {
@@ -34,6 +35,103 @@ function handleTally_(data) {
 
   Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
   Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
+
+  if (drawingUrl) {
+    const imageData = fetchImageFromUrl_(drawingUrl);
+    const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
+    const mergedGeminiResult = mergeTallyAnswersIntoGeminiResult_(
+      geminiResult,
+      answers,
+      parsed
+    );
+    const rawText = buildTallyImageRawText_(answers, freeText, drawingUrl);
+    const originalFileName = imageData.fileName || inferFileNameFromUrl_(drawingUrl);
+    const ledgerRow = buildLedgerRowFromGeminiResult_({
+      geminiResult: mergedGeminiResult,
+      receivedAt: now,
+      rawText: rawText,
+      source: 'Tally',
+      status: 'AI登録済',
+      drawingUrl: drawingUrl,
+    });
+    const ledgerId = createLedgerEntry_(ledgerRow);
+    const internalLogRow = buildInternalLogRowFromGeminiResult_({
+      geminiResult: mergedGeminiResult,
+      ledgerRow: Object.assign({}, ledgerRow, {
+        id: ledgerId,
+      }),
+      rawText: rawText,
+      lineUserId: '',
+    });
+    const savedProject = saveProjectToSupabase_({
+      geminiResult: mergedGeminiResult,
+      ledgerRow: Object.assign({}, ledgerRow, {
+        projectType: 'Web見積依頼',
+        originalFileName: originalFileName,
+        originalImageUrl: answers.fileUrl || '',
+        drawingUrl: drawingUrl,
+        ledgerId: ledgerId,
+      }),
+      flowType: 'image',
+      projectType: 'Web見積依頼',
+      originalFileName: originalFileName,
+      originalImageUrl: answers.fileUrl || '',
+      savedImageUrl: drawingUrl,
+      drawingUrl: drawingUrl,
+      ocrText: '',
+      aiExtractedJson: safeStringify_(mergedGeminiResult),
+      validationResult: '必要時確認',
+      processingStatus: '案件台帳登録済',
+      errorMessage: '',
+      ledgerId: ledgerId,
+      lineUserId: '',
+    });
+    const imageRecordId = savedProject && savedProject.id ? savedProject.id : '';
+    const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
+      id: imageRecordId,
+      geminiResult: mergedGeminiResult,
+      receivedAt: now,
+      rawText: rawText,
+      source: 'Tally',
+      projectType: 'Web見積依頼',
+      status: 'AI登録済',
+      email: answers.email,
+      phone: answers.phone,
+      originalFileName: originalFileName,
+      originalImageUrl: answers.fileUrl || '',
+      drawingUrl: drawingUrl,
+      ledgerId: ledgerId,
+    });
+    const imageInternalLogRow = buildImageInternalLogRowFromGeminiResult_({
+      id: imageRecordId,
+      geminiResult: mergedGeminiResult,
+      imageLedgerRow: imageLedgerRow,
+      createdAt: now,
+      savedImageUrl: drawingUrl,
+      processingStatus: '案件台帳登録済',
+      validationResult: '必要時確認',
+      errorMessage: '',
+      ocrText: '',
+      notes: rawText,
+    });
+
+    appendInternalLogRow_(internalLogRow);
+    upsertImageInternalLogRow_(imageInternalLogRow);
+    upsertImageLedgerRow_(imageLedgerRow);
+
+    if (savedProject && savedProject.id) {
+      saveProjectItemsToSupabase_(savedProject.id, mergedGeminiResult, {
+        parentDueDate: imageLedgerRow.dueDate,
+      });
+    }
+
+    notifyTallyInquiry_(buildTallyNotificationAnswers_(answers, mergedGeminiResult));
+    Logger.log('handleTally_ notify finished');
+
+    return ContentService.createTextOutput(
+      JSON.stringify({ ok: true })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
 
   appendInternalLogRow_({
     id: '',
@@ -86,6 +184,65 @@ function handleTally_(data) {
   return ContentService.createTextOutput(
     JSON.stringify({ ok: true }),
   ).setMimeType(ContentService.MimeType.JSON);
+}
+
+function mergeTallyAnswersIntoGeminiResult_(geminiResult, answers, parsed) {
+  const result = Object.assign({}, geminiResult || {});
+  const primaryItem =
+    Array.isArray(result.items) && result.items.length > 0
+      ? Object.assign({}, result.items[0])
+      : {};
+
+  result.customer_name = result.customer_name || answers.companyName || '';
+  result.contact_name = result.contact_name || answers.contactName || '';
+  result.project_name =
+    result.project_name || answers.inquiry || parsed.project_name || '';
+  result.material = result.material || answers.material || parsed.material || '';
+  result.size_thickness =
+    result.size_thickness || answers.sizeThickness || '';
+  result.quantity = result.quantity || answers.quantity || parsed.quantity || '';
+  result.desired_due_date =
+    result.desired_due_date || answers.dueDate || parsed.due_date || '';
+  result.notes = result.notes || answers.notes || parsed.notes || '';
+
+  primaryItem.customer_name =
+    primaryItem.customer_name || result.customer_name || '';
+  primaryItem.contact_name = primaryItem.contact_name || result.contact_name || '';
+  primaryItem.item_name =
+    primaryItem.item_name || result.project_name || answers.inquiry || '';
+  primaryItem.material = primaryItem.material || result.material || '';
+  primaryItem.size_thickness =
+    primaryItem.size_thickness || result.size_thickness || '';
+  primaryItem.quantity = primaryItem.quantity || result.quantity || '';
+  primaryItem.due_date =
+    primaryItem.due_date || result.desired_due_date || '';
+  primaryItem.note = primaryItem.note || result.notes || '';
+
+  result.items = [primaryItem];
+
+  return result;
+}
+
+function buildTallyImageRawText_(answers, freeText, drawingUrl) {
+  return [
+    'Tally画像フォームを受信',
+    'companyName: ' + String(answers.companyName || ''),
+    'contactName: ' + String(answers.contactName || ''),
+    'email: ' + String(answers.email || ''),
+    'phone: ' + String(answers.phone || ''),
+    'inquiry: ' + String(answers.inquiry || ''),
+    'dueDate: ' + String(answers.dueDate || ''),
+    'fileUrl: ' + String(answers.fileUrl || ''),
+    'savedImageUrl: ' + String(drawingUrl || ''),
+    'freeText: ' + String(freeText || ''),
+  ].join('\n');
+}
+
+function buildTallyNotificationAnswers_(answers, geminiResult) {
+  return Object.assign({}, answers, {
+    inquiry: geminiResult.project_name || answers.inquiry || '',
+    dueDate: geminiResult.desired_due_date || answers.dueDate || '',
+  });
 }
 
 function notifyTallyInquiry_(answers) {

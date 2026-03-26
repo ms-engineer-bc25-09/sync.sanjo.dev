@@ -282,7 +282,7 @@ function buildLineRegistrationReplyMessage_(project) {
   );
 
   return [
-    '案件を受付しました。',
+    'AIが案件台帳へ登録しました。',
     '',
     '・顧客名：' + customerName,
     '・案件名：' + projectName,
@@ -290,8 +290,7 @@ function buildLineRegistrationReplyMessage_(project) {
     '・数量：' + quantity,
     '・希望納期：' + (dueDate === '-' ? '登録なし' : dueDate),
     '',
-    '内容の変更があれば、',
-    '項目名と一緒に送ってください。',
+    '必要があれば、案件台帳上で直接修正できます。',
     '',
     '「類似」と送ると、過去の類似案件を検索できます。',
     '',
@@ -611,96 +610,122 @@ function handleLineImageMessage_(event) {
     'size(bytes): ' +
     (imageData.blob ? imageData.blob.getBytes().length : 0);
 
-  const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
+  const ledgerRow = buildLedgerRowFromGeminiResult_({
     geminiResult: geminiResult,
     receivedAt: now,
     rawText: rawText,
     source: 'LINE',
-    projectType: '受付メモ',
-    status: '未処理',
-    originalFileName: imageData.blob
-      ? imageData.blob.getName()
-      : 'line-image-' + messageId,
-    originalImageUrl: '',
+    status: 'AI登録済',
     drawingUrl: drawingUrl,
   });
-  const imageInternalLogRow = buildImageInternalLogRowFromGeminiResult_({
+  const ledgerId = createLedgerEntry_(ledgerRow);
+  const internalLogRow = buildInternalLogRowFromGeminiResult_({
     geminiResult: geminiResult,
-    imageLedgerRow: imageLedgerRow,
-    createdAt: now,
-    savedImageUrl: drawingUrl,
-    processingStatus: 'AI抽出済',
-    validationResult: '未確認',
-    errorMessage: '',
-    ocrText: '',
-    notes: rawText,
-  });
-
-  upsertImageInternalLogRow_(imageInternalLogRow);
-  upsertImageLedgerRow_(imageLedgerRow);
-
-  const savedProject = saveProjectToSupabase_({
-    geminiResult: geminiResult,
-    ledgerRow: imageLedgerRow,
-    flowType: 'image',
-    projectType: imageLedgerRow.projectType,
-    originalFileName: imageLedgerRow.originalFileName,
-    originalImageUrl: imageLedgerRow.originalImageUrl,
-    savedImageUrl: drawingUrl,
-    drawingUrl: imageLedgerRow.drawingUrl,
-    ocrText: imageInternalLogRow.ocrText,
-    aiExtractedJson: imageInternalLogRow.aiExtractedJson,
-    validationResult: imageInternalLogRow.validationResult,
-    processingStatus: imageInternalLogRow.processingStatus,
-    errorMessage: imageInternalLogRow.errorMessage,
+    ledgerRow: Object.assign({}, ledgerRow, {
+      id: ledgerId,
+    }),
+    rawText: rawText,
     lineUserId: lineUserId,
   });
 
-  if (savedProject && savedProject.id) {
-    saveProjectItemsToSupabase_(savedProject.id, geminiResult, {
-      parentDueDate: imageLedgerRow.dueDate,
-    });
-  }
-
   if (replyToken) {
-    const customerName = geminiResult.customer_name || '登録なし';
-    const projectName = geminiResult.project_name || '登録なし';
-    const material = geminiResult.material || '登録なし';
-    const quantity = geminiResult.quantity || '登録なし';
-    const dueDate = formatLineDate_(geminiResult.desired_due_date || '');
-
-    const replyText =
-      '画像を受け付けました。\n' +
-      '以下の内容で登録しました。\n\n' +
-      '・顧客名：' +
-      customerName +
-      '\n' +
-      '・案件名：' +
-      projectName +
-      '\n' +
-      '・材質：' +
-      material +
-      '\n' +
-      '・数量：' +
-      quantity +
-      '\n' +
-      '・希望納期：' +
-      (dueDate === '-' ? '登録なし' : dueDate) +
-      '\n\n' +
-      '内容の変更があれば、\n' +
-      '項目名と一緒に送ってください。\n' +
-      'その内容で登録情報を上書きします。\n\n' +
-      '過去の類似案件も確認できます。\n' +
-      '「類似」と送ると検索します。\n\n' +
-      '案件台帳はこちら：\n' +
-      SPREADSHEET_URL;
-
     replyLineMessage_(replyToken, [
       {
         type: 'text',
-        text: replyText,
+        text: buildLineImageRegistrationReplyMessage_(geminiResult),
       },
     ]);
+  }
+
+  try {
+    const savedProject = saveProjectToSupabase_({
+      geminiResult: geminiResult,
+      ledgerRow: Object.assign({}, ledgerRow, {
+        projectType: '受付メモ',
+        originalFileName: imageData.blob
+          ? imageData.blob.getName()
+          : 'line-image-' + messageId,
+        originalImageUrl: '',
+        drawingUrl: drawingUrl,
+        ledgerId: ledgerId,
+      }),
+      flowType: 'image',
+      projectType: '受付メモ',
+      originalFileName: imageData.blob
+        ? imageData.blob.getName()
+        : 'line-image-' + messageId,
+      originalImageUrl: '',
+      savedImageUrl: drawingUrl,
+      drawingUrl: drawingUrl,
+      ocrText: '',
+      aiExtractedJson: ledgerRow.rawJson,
+      validationResult: '必要時確認',
+      processingStatus: '案件台帳登録済',
+      errorMessage: '',
+      ledgerId: ledgerId,
+      lineUserId: lineUserId,
+    });
+
+    const imageRecordId = savedProject && savedProject.id ? savedProject.id : '';
+    const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
+      id: imageRecordId,
+      geminiResult: geminiResult,
+      receivedAt: now,
+      rawText: rawText,
+      source: 'LINE',
+      projectType: '受付メモ',
+      status: 'AI登録済',
+      originalFileName: imageData.blob
+        ? imageData.blob.getName()
+        : 'line-image-' + messageId,
+      originalImageUrl: '',
+      drawingUrl: drawingUrl,
+      ledgerId: ledgerId,
+    });
+    const imageInternalLogRow = buildImageInternalLogRowFromGeminiResult_({
+      id: imageRecordId,
+      geminiResult: geminiResult,
+      imageLedgerRow: imageLedgerRow,
+      createdAt: now,
+      savedImageUrl: drawingUrl,
+      processingStatus: '案件台帳登録済',
+      validationResult: '必要時確認',
+      errorMessage: '',
+      ocrText: '',
+      notes: rawText,
+    });
+
+    appendInternalLogRow_(internalLogRow);
+    upsertImageInternalLogRow_(imageInternalLogRow);
+    upsertImageLedgerRow_(imageLedgerRow);
+
+    if (savedProject && savedProject.id) {
+      saveProjectItemsToSupabase_(savedProject.id, geminiResult, {
+        parentDueDate: imageLedgerRow.dueDate,
+      });
+    }
+  } catch (postProcessError) {
+    Logger.log(
+      'handleLineImageMessage_ post process error: ' + postProcessError.message
+    );
+    Logger.log(
+      'handleLineImageMessage_ post process error stack: ' +
+        postProcessError.stack
+    );
+
+    appendLineImagePostProcessErrorLogs_({
+      geminiResult: geminiResult,
+      rawText: rawText,
+      receivedAt: now,
+      drawingUrl: drawingUrl,
+      originalFileName: imageData.blob
+        ? imageData.blob.getName()
+        : 'line-image-' + messageId,
+      ledgerId: ledgerId,
+      errorMessage: postProcessError.message,
+      baseNotes: ledgerRow.notes || '',
+      lineUserId: lineUserId,
+    });
   }
 }
 
@@ -726,7 +751,7 @@ function buildLedgerRowFromGeminiResult_(options) {
 
   return {
     id: options.id || '',
-    receivedAt: new Date(),
+    receivedAt: options.receivedAt || new Date(),
     status: options.status || '',
     source: options.source || '',
     customerName: result.customer_name || '',
@@ -742,6 +767,131 @@ function buildLedgerRowFromGeminiResult_(options) {
     drawingUrl: options.drawingUrl || '',
     rawJson: rawJson,
   };
+}
+
+function buildLineImageRegistrationReplyMessage_(geminiResult) {
+  const customerName = geminiResult.customer_name || '登録なし';
+  const projectName = geminiResult.project_name || '登録なし';
+  const material = geminiResult.material || '登録なし';
+  const quantity = geminiResult.quantity || '登録なし';
+  const dueDate = formatLineDate_(geminiResult.desired_due_date || '');
+
+  return (
+    '画像を読み取り、案件台帳へ自動登録しました。\n\n' +
+    '・顧客名：' +
+    customerName +
+    '\n' +
+    '・案件名：' +
+    projectName +
+    '\n' +
+    '・材質：' +
+    material +
+    '\n' +
+    '・数量：' +
+    quantity +
+    '\n' +
+    '・希望納期：' +
+    (dueDate === '-' ? '登録なし' : dueDate) +
+    '\n\n' +
+    '必要があれば、案件台帳上で直接修正できます。\n\n' +
+    '過去の類似案件も確認できます。\n' +
+    '「類似」と送ると検索します。\n\n' +
+    '案件台帳はこちら：\n' +
+    SPREADSHEET_URL
+  );
+}
+
+function appendLineImagePostProcessErrorLogs_(options) {
+  const errorMessage = String(options.errorMessage || '後処理エラー').trim();
+  const internalLogRow = buildInternalLogRowFromGeminiResult_({
+    geminiResult: options.geminiResult,
+    ledgerRow: {
+      id: options.ledgerId || '',
+      receivedAt: options.receivedAt,
+      status: '後処理エラー',
+      source: 'LINE',
+      customerName: options.geminiResult?.customer_name || '',
+      contactName: options.geminiResult?.contact_name || '',
+      material: options.geminiResult?.material || '',
+      sizeThickness: options.geminiResult?.size_thickness || '',
+      quantity: options.geminiResult?.quantity || '',
+      dueDate: options.geminiResult?.desired_due_date || '',
+      notes: '[後処理エラー] ' + errorMessage,
+      rawJson: safeStringify_(options.geminiResult),
+    },
+    rawText: options.rawText,
+    lineUserId: options.lineUserId || '',
+  });
+  const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
+    id: '',
+    geminiResult: options.geminiResult,
+    receivedAt: options.receivedAt,
+    rawText: options.rawText,
+    source: 'LINE',
+    projectType: '受付メモ',
+    status: 'AI登録済',
+    originalFileName: options.originalFileName || '',
+    originalImageUrl: '',
+    drawingUrl: options.drawingUrl || '',
+    ledgerId: options.ledgerId || '',
+  });
+  const imageInternalLogRow = buildImageInternalLogRowFromGeminiResult_({
+    id: '',
+    geminiResult: options.geminiResult,
+    imageLedgerRow: imageLedgerRow,
+    createdAt: options.receivedAt,
+    savedImageUrl: options.drawingUrl || '',
+    processingStatus: '後処理エラー',
+    validationResult: '要確認',
+    errorMessage: errorMessage,
+    ocrText: '',
+    notes: options.rawText || '',
+  });
+
+  try {
+    appendInternalLogRow_(internalLogRow);
+  } catch (internalLogError) {
+    Logger.log(
+      'appendLineImagePostProcessErrorLogs_ internal log error: ' +
+        internalLogError.message
+    );
+  }
+
+  try {
+    upsertImageInternalLogRow_(imageInternalLogRow);
+  } catch (imageLogError) {
+    Logger.log(
+      'appendLineImagePostProcessErrorLogs_ image log error: ' +
+        imageLogError.message
+    );
+  }
+
+  try {
+    const ledgerRowNumber = findRowNumberById_(
+      SHEET_NAMES.LEDGER,
+      COLUMNS.LEDGER.ID,
+      options.ledgerId
+    );
+
+    if (!ledgerRowNumber) {
+      return;
+    }
+
+    const joinedNotes = [options.baseNotes || '', '[後処理エラー] ' + errorMessage]
+      .filter(function (value) {
+        return String(value || '').trim() !== '';
+      })
+      .join('\n');
+
+    updateRowByHeaderMap_(SHEET_NAMES.LEDGER, ledgerRowNumber, {
+      [COLUMNS.LEDGER.NOTES]: joinedNotes,
+    });
+  } catch (ledgerUpdateError) {
+    Logger.log(
+      'appendLineImagePostProcessErrorLogs_ ledger update error: ' +
+        ledgerUpdateError.message
+    );
+  }
 }
 
 function buildImageLedgerRowFromGeminiResult_(options) {
@@ -885,7 +1035,7 @@ function handleSupabaseImageWebhook_(data) {
     rawText: rawText,
     source: normalizeSupabaseWebhookSource_(record.source_type || record.source),
     projectType: record.project_type || '受付メモ',
-    status: '未処理',
+    status: record.ledger_id ? 'AI登録済' : '未処理',
     email: record.email || '',
     phone: record.phone || '',
     originalFileName: record.original_file_name || imageData.fileName || '',
@@ -899,8 +1049,11 @@ function handleSupabaseImageWebhook_(data) {
     createdAt: receivedAt,
     updatedAt: parseDateValue_(record.updated_at) || receivedAt,
     savedImageUrl: imageLedgerRow.drawingUrl,
-    processingStatus: record.processing_status || 'AI抽出済',
-    validationResult: record.validation_result || '未確認',
+    processingStatus:
+      record.processing_status ||
+      (record.ledger_id ? '案件台帳登録済' : 'AI抽出済'),
+    validationResult:
+      record.validation_result || (record.ledger_id ? '必要時確認' : '未確認'),
     errorMessage: record.error_message || '',
     ocrText: record.ocr_text || '',
     aiExtractedJson:
