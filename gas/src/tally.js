@@ -5,10 +5,7 @@ function handleTally_(data) {
   const now = new Date();
   const answers = normalizeTallyAnswers_(data);
   const fields = data?.data?.fields || data?.fields || [];
-  const freeText = getFieldValueByLabel_(
-    fields,
-    '具体的な内容を教えてください（必須）',
-  );
+  const freeText = getTallyFreeText_(fields);
   const parsed = parseFreeText_(freeText);
   const rawJson = JSON.stringify(data);
 
@@ -19,13 +16,19 @@ function handleTally_(data) {
   answers.notes = answers.notes || parsed.notes || '';
 
   let drawingUrl = answers.fileUrl || '';
+  let uploadedImageData = null;
 
   if (answers.fileUrl) {
     try {
-      drawingUrl = uploadTallyFileToSupabase_(answers.fileUrl, {
+      const uploadResult = uploadTallyFileToSupabase_(answers.fileUrl, {
         receivedAt: now,
         source: 'tally',
       });
+      drawingUrl = uploadResult.publicUrl;
+      uploadedImageData = buildImageDataFromBlob_(
+        uploadResult.blob,
+        uploadResult.fileName
+      );
       Logger.log('handleTally_ uploaded file to supabase: ' + drawingUrl);
     } catch (error) {
       Logger.log('handleTally_ file upload error: ' + error.message);
@@ -37,7 +40,7 @@ function handleTally_(data) {
   Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
 
   if (drawingUrl) {
-    const imageData = fetchImageFromUrl_(drawingUrl);
+    const imageData = uploadedImageData || fetchImageFromUrl_(drawingUrl);
     const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
     const mergedGeminiResult = mergeTallyAnswersIntoGeminiResult_(
       geminiResult,
@@ -355,42 +358,57 @@ function normalizeTallyAnswers_(payload) {
   const fields = payload?.data?.fields || payload?.fields || [];
 
   const result = {
-    companyName: "",
-    contactName: "",
-    email: "",
-    phone: "",
-    inquiry: "",
-    dueDate: "",
-    material: "",
-    sizeThickness: "",
-    quantity: "",
-    notes: "",
-    fileUrl: "",
+    companyName: '',
+    contactName: '',
+    email: '',
+    phone: '',
+    inquiry: '',
+    dueDate: '',
+    material: '',
+    sizeThickness: '',
+    quantity: '',
+    notes: '',
+    fileUrl: '',
   };
 
   for (const field of fields) {
-    const label = field.label || field.title || "";
+    const label = field.label || field.title || '';
     const value = extractFieldValue_(field);
 
-    if (label.includes("会社名")) result.companyName = value;
-    else if (label.includes("ご担当者名")) result.contactName = value;
-    else if (label.includes("メールアドレス")) result.email = value;
-    else if (label.includes("電話番号")) result.phone = value;
-    else if (label.includes("ご相談内容")) result.inquiry = value;
-    else if (label.includes("希望納期")) result.dueDate = value;
-    else if (label.includes("材質")) result.material = value;
-    else if (label.includes("サイズ・板厚") || label.includes("サイズ板厚")) {
+    if (label.includes('会社名')) result.companyName = value;
+    else if (label.includes('ご担当者名') || label.includes('氏名')) {
+      result.contactName = value;
+    } else if (label.includes('メールアドレス')) result.email = value;
+    else if (label.includes('電話番号') || label.includes('ご連絡先電話番号')) {
+      result.phone = value;
+    } else if (label.includes('ご相談内容') || label.includes('具体的な内容')) {
+      result.inquiry = value;
+    } else if (label.includes('希望納期')) result.dueDate = value;
+    else if (label.includes('材質')) result.material = value;
+    else if (label.includes('サイズ・板厚') || label.includes('サイズ板厚')) {
       result.sizeThickness = value;
-    }
-    else if (label.includes("数量")) result.quantity = value;
-    else if (label.includes("補足事項")) result.notes = value;
+    } else if (label.includes('数量')) result.quantity = value;
+    else if (label.includes('補足事項')) result.notes = value;
     else if (
-      label.includes("図面・参考資料") ||
-      label.includes("図面参考資料")
+      label.includes('図面・参考資料') ||
+      label.includes('図面参考資料') ||
+      label.includes('図面や写真のアップロード')
     ) {
       result.fileUrl = value;
     }
   }
 
+  if (!result.companyName && result.contactName) {
+    result.companyName = result.contactName;
+  }
+
   return result;
+}
+
+function getTallyFreeText_(fields) {
+  return (
+    getFieldValueByLabel_(fields, '具体的な内容を教えてください') ||
+    getFieldValueByLabel_(fields, '具体的な内容') ||
+    ''
+  );
 }

@@ -1162,6 +1162,21 @@ function fetchImageFromUrl_(fileUrl) {
   };
 }
 
+function buildImageDataFromBlob_(blob, fileName) {
+  if (!blob) {
+    throw new Error('blob が指定されていません');
+  }
+
+  const namedBlob = fileName ? blob.copyBlob().setName(fileName) : blob.copyBlob();
+
+  return {
+    blob: namedBlob,
+    mimeType: namedBlob.getContentType() || 'image/jpeg',
+    base64: Utilities.base64Encode(namedBlob.getBytes()),
+    fileName: namedBlob.getName() || fileName || '',
+  };
+}
+
 function inferFileNameFromUrl_(fileUrl) {
   const match = String(fileUrl || '').match(/\/([^\/?#]+)(?:\?|#|$)/);
   return match ? decodeURIComponent(match[1]) : '';
@@ -1568,7 +1583,13 @@ function uploadTallyFileToSupabase_(fileUrl, options) {
     fileName: fileUrl,
   });
 
-  return uploadBlobToSupabase_(blob, mergedOptions);
+  const publicUrl = uploadBlobToSupabase_(blob, mergedOptions);
+
+  return {
+    blob: blob,
+    publicUrl: publicUrl,
+    fileName: inferFileNameFromUrl_(fileUrl),
+  };
 }
 
 function uploadBlobToSupabase_(blob, options) {
