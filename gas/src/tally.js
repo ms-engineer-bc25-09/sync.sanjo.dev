@@ -19,7 +19,7 @@ function handleTally_(data) {
 
   if (answers.fileUrl) {
     try {
-      const uploadResult = uploadTallyFileToSupabase_(answers.fileUrl, {
+      const uploadResult = uploadTallyFileToSupabaseWithMeta_(answers.fileUrl, {
         receivedAt: now,
         source: 'tally',
       });
