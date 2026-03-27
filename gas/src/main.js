@@ -1615,6 +1615,10 @@ function clearLineUserState_(lineUserId) {
 }
 
 function uploadTallyFileToSupabase_(fileUrl, options) {
+  return uploadTallyFileToSupabaseWithMeta_(fileUrl, options).publicUrl;
+}
+
+function uploadTallyFileToSupabaseWithMeta_(fileUrl, options) {
   if (!fileUrl) {
     throw new Error('fileUrl が指定されていません');
   }
@@ -2335,6 +2339,7 @@ function shouldSkipLedgerSyncRow_(ledgerSheetRow) {
     return false;
   }
 
+  // Temporary fallback for malformed Tally rows until a more stable marker is available.
   return inquiry.indexOf('Tally画像フォームを受信') === 0;
 }
 
