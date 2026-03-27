@@ -5,12 +5,8 @@ function handleTally_(data) {
   const now = new Date();
   const answers = normalizeTallyAnswers_(data);
   const fields = data?.data?.fields || data?.fields || [];
-  const freeText = getFieldValueByLabel_(
-    fields,
-    '具体的な内容を教えてください（必須）',
-  );
+  const freeText = getTallyFreeText_(fields);
   const parsed = parseFreeText_(freeText);
-  const rawJson = JSON.stringify(data);
 
   answers.inquiry = answers.inquiry || parsed.project_name || '';
   answers.dueDate = answers.dueDate || parsed.due_date || '';
@@ -19,13 +15,19 @@ function handleTally_(data) {
   answers.notes = answers.notes || parsed.notes || '';
 
   let drawingUrl = answers.fileUrl || '';
+  let uploadedImageData = null;
 
   if (answers.fileUrl) {
     try {
-      drawingUrl = uploadTallyFileToSupabase_(answers.fileUrl, {
+      const uploadResult = uploadTallyFileToSupabase_(answers.fileUrl, {
         receivedAt: now,
         source: 'tally',
       });
+      drawingUrl = uploadResult.publicUrl;
+      uploadedImageData = buildImageDataFromBlob_(
+        uploadResult.blob,
+        uploadResult.fileName
+      );
       Logger.log('handleTally_ uploaded file to supabase: ' + drawingUrl);
     } catch (error) {
       Logger.log('handleTally_ file upload error: ' + error.message);
@@ -36,8 +38,18 @@ function handleTally_(data) {
   Logger.log('handleTally_ normalized answers: ' + JSON.stringify(answers));
   Logger.log('handleTally_ parsed free text: ' + JSON.stringify(parsed));
 
+  if (isEmptyTallySubmission_(answers, freeText, parsed)) {
+    Logger.log('handleTally_ skipped: empty submission');
+    return ContentService.createTextOutput(
+      JSON.stringify({ ok: true, skipped: 'empty_tally_submission' })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const structuredResult = buildTallyStructuredResult_(answers, parsed);
+  const structuredJson = safeStringify_(structuredResult);
+
   if (drawingUrl) {
-    const imageData = fetchImageFromUrl_(drawingUrl);
+    const imageData = uploadedImageData || fetchImageFromUrl_(drawingUrl);
     const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
     const mergedGeminiResult = mergeTallyAnswersIntoGeminiResult_(
       geminiResult,
@@ -133,52 +145,59 @@ function handleTally_(data) {
     ).setMimeType(ContentService.MimeType.JSON);
   }
 
-  appendInternalLogRow_({
-    id: '',
-    createdAt: now,
+  const rawText = buildTallyImageRawText_(answers, freeText, '');
+  const ledgerRow = buildLedgerRowFromGeminiResult_({
+    geminiResult: structuredResult,
+    receivedAt: now,
+    rawText: rawText,
     source: 'Tally',
-    status: '未対応',
-    customerName: answers.companyName,
-    contactName: answers.contactName,
-    projectName: answers.inquiry,
-    drawingNumber: '',
-    material: answers.material,
-    size: answers.sizeThickness,
-    quantity: answers.quantity,
-    dueDate: answers.dueDate,
-    notes: answers.notes,
-    rawText: answers.inquiry,
-    lineUserId: '',
-    aiExtractedJson: rawJson,
-    similarCase: '',
-    pastUnitPrice: '',
-    suggestedPrice: '',
-    spreadsheetUpdatedAt: now,
+    status: 'AI登録済',
+    drawingUrl: '',
   });
+
+  ledgerRow.email = answers.email || '';
+  ledgerRow.phone = answers.phone || '';
+  ledgerRow.rawJson = structuredJson;
+
+  const ledgerId = createLedgerEntry_(ledgerRow);
+  const internalLogRow = buildInternalLogRowFromGeminiResult_({
+    geminiResult: structuredResult,
+    ledgerRow: Object.assign({}, ledgerRow, {
+      id: ledgerId,
+    }),
+    rawText: rawText,
+    lineUserId: '',
+  });
+
+  appendInternalLogRow_(internalLogRow);
 
   Logger.log('handleTally_ internal log appended');
 
-  appendLedgerRow_({
-    receivedAt: now,
-    status: '未対応',
-    source: 'Tally',
-    customerName: answers.companyName,
-    contactName: answers.contactName,
-    email: answers.email,
-    phone: answers.phone,
-    inquiry: answers.inquiry,
-    dueDate: answers.dueDate,
-    material: answers.material,
-    sizeThickness: answers.sizeThickness,
-    quantity: answers.quantity,
-    notes: answers.notes,
-    drawingUrl: drawingUrl,
-    rawJson: rawJson,
+  const savedProject = saveProjectToSupabase_({
+    geminiResult: structuredResult,
+    ledgerRow: Object.assign({}, ledgerRow, {
+      projectType: 'Web見積依頼',
+      ledgerId: ledgerId,
+    }),
+    flowType: 'normal',
+    projectType: 'Web見積依頼',
+    aiExtractedJson: structuredJson,
+    validationResult: '必要時確認',
+    processingStatus: '案件台帳登録済',
+    errorMessage: '',
+    ledgerId: ledgerId,
+    lineUserId: '',
   });
+
+  if (savedProject && savedProject.id) {
+    saveProjectItemsToSupabase_(savedProject.id, structuredResult, {
+      parentDueDate: ledgerRow.dueDate,
+    });
+  }
 
   Logger.log('handleTally_ ledger appended');
 
-  notifyTallyInquiry_(answers);
+  notifyTallyInquiry_(buildTallyNotificationAnswers_(answers, structuredResult));
   Logger.log('handleTally_ notify finished');
 
   return ContentService.createTextOutput(
@@ -355,42 +374,87 @@ function normalizeTallyAnswers_(payload) {
   const fields = payload?.data?.fields || payload?.fields || [];
 
   const result = {
-    companyName: "",
-    contactName: "",
-    email: "",
-    phone: "",
-    inquiry: "",
-    dueDate: "",
-    material: "",
-    sizeThickness: "",
-    quantity: "",
-    notes: "",
-    fileUrl: "",
+    companyName: '',
+    contactName: '',
+    email: '',
+    phone: '',
+    inquiry: '',
+    dueDate: '',
+    material: '',
+    sizeThickness: '',
+    quantity: '',
+    notes: '',
+    fileUrl: '',
   };
 
   for (const field of fields) {
-    const label = field.label || field.title || "";
+    const label = field.label || field.title || '';
     const value = extractFieldValue_(field);
 
-    if (label.includes("会社名")) result.companyName = value;
-    else if (label.includes("ご担当者名")) result.contactName = value;
-    else if (label.includes("メールアドレス")) result.email = value;
-    else if (label.includes("電話番号")) result.phone = value;
-    else if (label.includes("ご相談内容")) result.inquiry = value;
-    else if (label.includes("希望納期")) result.dueDate = value;
-    else if (label.includes("材質")) result.material = value;
-    else if (label.includes("サイズ・板厚") || label.includes("サイズ板厚")) {
+    if (label.includes('会社名')) result.companyName = value;
+    else if (label.includes('ご担当者名') || label.includes('氏名')) {
+      result.contactName = value;
+    } else if (label.includes('メールアドレス')) result.email = value;
+    else if (label.includes('電話番号') || label.includes('ご連絡先電話番号')) {
+      result.phone = value;
+    } else if (label.includes('ご相談内容') || label.includes('具体的な内容')) {
+      result.inquiry = value;
+    } else if (label.includes('希望納期')) result.dueDate = value;
+    else if (label.includes('材質')) result.material = value;
+    else if (label.includes('サイズ・板厚') || label.includes('サイズ板厚')) {
       result.sizeThickness = value;
-    }
-    else if (label.includes("数量")) result.quantity = value;
-    else if (label.includes("補足事項")) result.notes = value;
+    } else if (label.includes('数量')) result.quantity = value;
+    else if (label.includes('補足事項')) result.notes = value;
     else if (
-      label.includes("図面・参考資料") ||
-      label.includes("図面参考資料")
+      label.includes('図面・参考資料') ||
+      label.includes('図面参考資料') ||
+      label.includes('図面や写真のアップロード')
     ) {
       result.fileUrl = value;
     }
   }
 
+  if (!result.companyName && result.contactName) {
+    result.companyName = result.contactName;
+  }
+
   return result;
+}
+
+function buildTallyStructuredResult_(answers, parsed) {
+  return mergeTallyAnswersIntoGeminiResult_({}, answers, parsed);
+}
+
+function isEmptyTallySubmission_(answers, freeText, parsed) {
+  const values = [
+    answers.companyName,
+    answers.contactName,
+    answers.email,
+    answers.phone,
+    answers.inquiry,
+    answers.dueDate,
+    answers.material,
+    answers.sizeThickness,
+    answers.quantity,
+    answers.notes,
+    answers.fileUrl,
+    freeText,
+    parsed.project_name,
+    parsed.due_date,
+    parsed.material,
+    parsed.quantity,
+    parsed.notes,
+  ];
+
+  return !values.some(function (value) {
+    return hasTallyValue_(value);
+  });
+}
+
+function getTallyFreeText_(fields) {
+  return (
+    getFieldValueByLabel_(fields, '具体的な内容を教えてください') ||
+    getFieldValueByLabel_(fields, '具体的な内容') ||
+    ''
+  );
 }
