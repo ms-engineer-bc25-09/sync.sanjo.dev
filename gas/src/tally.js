@@ -64,6 +64,8 @@ function handleTally_(data) {
       rawText: rawText,
       source: 'Tally',
       status: 'AI登録済',
+      email: answers.email || '',
+      phone: answers.phone || '',
       drawingUrl: drawingUrl,
     });
     const ledgerId = createLedgerEntry_(ledgerRow);
@@ -152,11 +154,10 @@ function handleTally_(data) {
     rawText: rawText,
     source: 'Tally',
     status: 'AI登録済',
+    email: answers.email || '',
+    phone: answers.phone || '',
     drawingUrl: '',
   });
-
-  ledgerRow.email = answers.email || '';
-  ledgerRow.phone = answers.phone || '';
   ledgerRow.rawJson = structuredJson;
 
   const ledgerId = createLedgerEntry_(ledgerRow);
@@ -214,6 +215,8 @@ function mergeTallyAnswersIntoGeminiResult_(geminiResult, answers, parsed) {
 
   result.customer_name = result.customer_name || answers.companyName || '';
   result.contact_name = result.contact_name || answers.contactName || '';
+  result.email = result.email || answers.email || '';
+  result.phone = result.phone || answers.phone || '';
   result.project_name =
     result.project_name || answers.inquiry || parsed.project_name || '';
   result.material = result.material || answers.material || parsed.material || '';
