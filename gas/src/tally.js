@@ -7,6 +7,21 @@ function handleTally_(data) {
   const fields = data?.data?.fields || data?.fields || [];
   const freeText = getTallyFreeText_(fields);
   const parsed = parseFreeText_(freeText);
+  const submissionFingerprint = buildTallySubmissionFingerprint_({
+    data: data,
+    answers: answers,
+    freeText: freeText,
+    parsed: parsed,
+  });
+
+  if (shouldSkipDuplicateTallySubmission_(submissionFingerprint, now)) {
+    Logger.log(
+      'handleTally_ skipped duplicate submission: ' + submissionFingerprint
+    );
+    return ContentService.createTextOutput(
+      JSON.stringify({ ok: true, skipped: 'duplicate_tally_submission' })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
 
   answers.inquiry = answers.inquiry || parsed.project_name || '';
   answers.dueDate = answers.dueDate || parsed.due_date || '';
@@ -40,170 +55,159 @@ function handleTally_(data) {
 
   if (isEmptyTallySubmission_(answers, freeText, parsed)) {
     Logger.log('handleTally_ skipped: empty submission');
+    clearInProgressTallySubmission_(submissionFingerprint);
     return ContentService.createTextOutput(
       JSON.stringify({ ok: true, skipped: 'empty_tally_submission' })
     ).setMimeType(ContentService.MimeType.JSON);
   }
 
-  const structuredResult = buildTallyStructuredResult_(answers, parsed);
-  const structuredJson = safeStringify_(structuredResult);
+  try {
+    const structuredResult = buildTallyStructuredResult_(answers, parsed);
+    const structuredJson = safeStringify_(structuredResult);
 
-  if (drawingUrl) {
-    const imageData = uploadedImageData || fetchImageFromUrl_(drawingUrl);
-    const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
-    const mergedGeminiResult = mergeTallyAnswersIntoGeminiResult_(
-      geminiResult,
-      answers,
-      parsed
-    );
-    const rawText = buildTallyImageRawText_(answers, freeText, drawingUrl);
-    const originalFileName = imageData.fileName || inferFileNameFromUrl_(drawingUrl);
+    if (drawingUrl) {
+      const imageData = uploadedImageData || fetchImageFromUrl_(drawingUrl);
+      const geminiResult = callGeminiImage_(imageData.base64, imageData.mimeType);
+      const mergedGeminiResult = mergeTallyAnswersIntoGeminiResult_(
+        geminiResult,
+        answers,
+        parsed
+      );
+      const rawText = buildTallyImageRawText_(answers, freeText, drawingUrl);
+      const originalFileName =
+        imageData.fileName || inferFileNameFromUrl_(drawingUrl);
+      const ledgerRow = buildLedgerRowFromGeminiResult_({
+        geminiResult: mergedGeminiResult,
+        receivedAt: now,
+        rawText: rawText,
+        source: 'Tally',
+        status: 'AI登録済',
+        email: answers.email || '',
+        phone: answers.phone || '',
+        drawingUrl: drawingUrl,
+      });
+      const ledgerId = createLedgerEntry_(ledgerRow);
+      const savedProject = saveProjectToSupabase_({
+        geminiResult: mergedGeminiResult,
+        ledgerRow: Object.assign({}, ledgerRow, {
+          projectType: 'Web見積依頼',
+          originalFileName: originalFileName,
+          originalImageUrl: answers.fileUrl || '',
+          drawingUrl: drawingUrl,
+          ledgerId: ledgerId,
+        }),
+        flowType: 'image',
+        projectType: 'Web見積依頼',
+        originalFileName: originalFileName,
+        originalImageUrl: answers.fileUrl || '',
+        savedImageUrl: drawingUrl,
+        drawingUrl: drawingUrl,
+        ocrText: '',
+        aiExtractedJson: safeStringify_(mergedGeminiResult),
+        validationResult: '必要時確認',
+        processingStatus: '案件台帳登録済',
+        errorMessage: '',
+        ledgerId: ledgerId,
+        lineUserId: '',
+      });
+      const imageRecordId =
+        savedProject && savedProject.id ? savedProject.id : '';
+      const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
+        id: imageRecordId,
+        geminiResult: mergedGeminiResult,
+        receivedAt: now,
+        rawText: rawText,
+        source: 'Tally',
+        projectType: 'Web見積依頼',
+        status: 'AI登録済',
+        email: answers.email,
+        phone: answers.phone,
+        originalFileName: originalFileName,
+        originalImageUrl: answers.fileUrl || '',
+        drawingUrl: drawingUrl,
+        ledgerId: ledgerId,
+      });
+
+      if (savedProject && savedProject.id) {
+        saveProjectItemsToSupabase_(savedProject.id, mergedGeminiResult, {
+          parentDueDate: imageLedgerRow.dueDate,
+        });
+      }
+
+      markTallySubmissionProcessed_(submissionFingerprint, {
+        processedAt: now,
+        ledgerId: ledgerId,
+      });
+
+      Logger.log(
+        'handleTally_ skipped spreadsheet auxiliary writes: internal/image logs will sync later'
+      );
+
+      notifyTallyInquiry_(
+        buildTallyNotificationAnswers_(answers, mergedGeminiResult)
+      );
+      Logger.log('handleTally_ notify finished');
+
+      return ContentService.createTextOutput(
+        JSON.stringify({ ok: true })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const rawText = buildTallyImageRawText_(answers, freeText, '');
     const ledgerRow = buildLedgerRowFromGeminiResult_({
-      geminiResult: mergedGeminiResult,
+      geminiResult: structuredResult,
       receivedAt: now,
       rawText: rawText,
       source: 'Tally',
       status: 'AI登録済',
       email: answers.email || '',
       phone: answers.phone || '',
-      drawingUrl: drawingUrl,
+      drawingUrl: '',
     });
+    ledgerRow.rawJson = structuredJson;
+
     const ledgerId = createLedgerEntry_(ledgerRow);
-    const internalLogRow = buildInternalLogRowFromGeminiResult_({
-      geminiResult: mergedGeminiResult,
-      ledgerRow: Object.assign({}, ledgerRow, {
-        id: ledgerId,
-      }),
-      rawText: rawText,
-      lineUserId: '',
-    });
+    Logger.log('handleTally_ internal log deferred');
+
     const savedProject = saveProjectToSupabase_({
-      geminiResult: mergedGeminiResult,
+      geminiResult: structuredResult,
       ledgerRow: Object.assign({}, ledgerRow, {
         projectType: 'Web見積依頼',
-        originalFileName: originalFileName,
-        originalImageUrl: answers.fileUrl || '',
-        drawingUrl: drawingUrl,
         ledgerId: ledgerId,
       }),
-      flowType: 'image',
+      flowType: 'normal',
       projectType: 'Web見積依頼',
-      originalFileName: originalFileName,
-      originalImageUrl: answers.fileUrl || '',
-      savedImageUrl: drawingUrl,
-      drawingUrl: drawingUrl,
-      ocrText: '',
-      aiExtractedJson: safeStringify_(mergedGeminiResult),
+      aiExtractedJson: structuredJson,
       validationResult: '必要時確認',
       processingStatus: '案件台帳登録済',
       errorMessage: '',
       ledgerId: ledgerId,
       lineUserId: '',
     });
-    const imageRecordId = savedProject && savedProject.id ? savedProject.id : '';
-    const imageLedgerRow = buildImageLedgerRowFromGeminiResult_({
-      id: imageRecordId,
-      geminiResult: mergedGeminiResult,
-      receivedAt: now,
-      rawText: rawText,
-      source: 'Tally',
-      projectType: 'Web見積依頼',
-      status: 'AI登録済',
-      email: answers.email,
-      phone: answers.phone,
-      originalFileName: originalFileName,
-      originalImageUrl: answers.fileUrl || '',
-      drawingUrl: drawingUrl,
-      ledgerId: ledgerId,
-    });
-    const imageInternalLogRow = buildImageInternalLogRowFromGeminiResult_({
-      id: imageRecordId,
-      geminiResult: mergedGeminiResult,
-      imageLedgerRow: imageLedgerRow,
-      createdAt: now,
-      savedImageUrl: drawingUrl,
-      processingStatus: '案件台帳登録済',
-      validationResult: '必要時確認',
-      errorMessage: '',
-      ocrText: '',
-      notes: rawText,
-    });
-
-    appendInternalLogRow_(internalLogRow);
-    upsertImageInternalLogRow_(imageInternalLogRow);
-    upsertImageLedgerRow_(imageLedgerRow);
 
     if (savedProject && savedProject.id) {
-      saveProjectItemsToSupabase_(savedProject.id, mergedGeminiResult, {
-        parentDueDate: imageLedgerRow.dueDate,
+      saveProjectItemsToSupabase_(savedProject.id, structuredResult, {
+        parentDueDate: ledgerRow.dueDate,
       });
     }
 
-    notifyTallyInquiry_(buildTallyNotificationAnswers_(answers, mergedGeminiResult));
+    Logger.log('handleTally_ ledger appended');
+
+    markTallySubmissionProcessed_(submissionFingerprint, {
+      processedAt: now,
+      ledgerId: ledgerId,
+    });
+
+    notifyTallyInquiry_(buildTallyNotificationAnswers_(answers, structuredResult));
     Logger.log('handleTally_ notify finished');
 
     return ContentService.createTextOutput(
       JSON.stringify({ ok: true })
     ).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    clearInProgressTallySubmission_(submissionFingerprint);
+    throw error;
   }
-
-  const rawText = buildTallyImageRawText_(answers, freeText, '');
-  const ledgerRow = buildLedgerRowFromGeminiResult_({
-    geminiResult: structuredResult,
-    receivedAt: now,
-    rawText: rawText,
-    source: 'Tally',
-    status: 'AI登録済',
-    email: answers.email || '',
-    phone: answers.phone || '',
-    drawingUrl: '',
-  });
-  ledgerRow.rawJson = structuredJson;
-
-  const ledgerId = createLedgerEntry_(ledgerRow);
-  const internalLogRow = buildInternalLogRowFromGeminiResult_({
-    geminiResult: structuredResult,
-    ledgerRow: Object.assign({}, ledgerRow, {
-      id: ledgerId,
-    }),
-    rawText: rawText,
-    lineUserId: '',
-  });
-
-  appendInternalLogRow_(internalLogRow);
-
-  Logger.log('handleTally_ internal log appended');
-
-  const savedProject = saveProjectToSupabase_({
-    geminiResult: structuredResult,
-    ledgerRow: Object.assign({}, ledgerRow, {
-      projectType: 'Web見積依頼',
-      ledgerId: ledgerId,
-    }),
-    flowType: 'normal',
-    projectType: 'Web見積依頼',
-    aiExtractedJson: structuredJson,
-    validationResult: '必要時確認',
-    processingStatus: '案件台帳登録済',
-    errorMessage: '',
-    ledgerId: ledgerId,
-    lineUserId: '',
-  });
-
-  if (savedProject && savedProject.id) {
-    saveProjectItemsToSupabase_(savedProject.id, structuredResult, {
-      parentDueDate: ledgerRow.dueDate,
-    });
-  }
-
-  Logger.log('handleTally_ ledger appended');
-
-  notifyTallyInquiry_(buildTallyNotificationAnswers_(answers, structuredResult));
-  Logger.log('handleTally_ notify finished');
-
-  return ContentService.createTextOutput(
-    JSON.stringify({ ok: true }),
-  ).setMimeType(ContentService.MimeType.JSON);
 }
 
 function mergeTallyAnswersIntoGeminiResult_(geminiResult, answers, parsed) {
@@ -212,11 +216,21 @@ function mergeTallyAnswersIntoGeminiResult_(geminiResult, answers, parsed) {
     Array.isArray(result.items) && result.items.length > 0
       ? Object.assign({}, result.items[0])
       : {};
+  const emailResolution = resolveTallyContactField_(
+    answers.email,
+    result.email || primaryItem.email || ''
+  );
+  const phoneResolution = resolveTallyContactField_(
+    answers.phone,
+    result.phone || primaryItem.phone || ''
+  );
 
   result.customer_name = result.customer_name || answers.companyName || '';
   result.contact_name = result.contact_name || answers.contactName || '';
-  result.email = result.email || answers.email || '';
-  result.phone = result.phone || answers.phone || '';
+  result.email = emailResolution.value;
+  result.email_source = emailResolution.source;
+  result.phone = phoneResolution.value;
+  result.phone_source = phoneResolution.source;
   result.project_name =
     result.project_name || answers.inquiry || parsed.project_name || '';
   result.material = result.material || answers.material || parsed.material || '';
@@ -243,6 +257,30 @@ function mergeTallyAnswersIntoGeminiResult_(geminiResult, answers, parsed) {
   result.items = [primaryItem];
 
   return result;
+}
+
+function resolveTallyContactField_(tallyValue, extractedValue) {
+  const normalizedTallyValue = String(tallyValue || '').trim();
+  const normalizedExtractedValue = String(extractedValue || '').trim();
+
+  if (normalizedTallyValue) {
+    return {
+      value: normalizedTallyValue,
+      source: 'Tally入力',
+    };
+  }
+
+  if (normalizedExtractedValue) {
+    return {
+      value: normalizedExtractedValue,
+      source: 'OCR補完',
+    };
+  }
+
+  return {
+    value: '',
+    source: '未入力',
+  };
 }
 
 function buildTallyImageRawText_(answers, freeText, drawingUrl) {
@@ -422,6 +460,173 @@ function normalizeTallyAnswers_(payload) {
   }
 
   return result;
+}
+
+function buildTallySubmissionFingerprint_(options) {
+  const data = options?.data || {};
+  const answers = options?.answers || {};
+  const freeText = options?.freeText || '';
+  const parsed = options?.parsed || {};
+  const explicitId =
+    findTallySubmissionIdentifier_(data) ||
+    findTallySubmissionIdentifier_(data?.data || {}) ||
+    '';
+  const fingerprintPayload = {
+    explicitId: explicitId,
+    companyName: String(answers.companyName || '').trim(),
+    contactName: String(answers.contactName || '').trim(),
+    email: String(answers.email || '').trim(),
+    phone: String(answers.phone || '').trim(),
+    inquiry: String(answers.inquiry || '').trim(),
+    dueDate: String(answers.dueDate || '').trim(),
+    material: String(answers.material || '').trim(),
+    sizeThickness: String(answers.sizeThickness || '').trim(),
+    quantity: String(answers.quantity || '').trim(),
+    notes: String(answers.notes || '').trim(),
+    fileUrl: String(answers.fileUrl || '').trim(),
+    freeText: String(freeText || '').trim(),
+    parsedProjectName: String(parsed.project_name || '').trim(),
+    parsedDueDate: String(parsed.due_date || '').trim(),
+    createdAt:
+      String(data.createdAt || data.created_at || data?.data?.createdAt || '')
+        .trim(),
+  };
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(fingerprintPayload)
+  );
+
+  return bytes
+    .map(function (byte) {
+      const normalized = byte < 0 ? byte + 256 : byte;
+      return ('0' + normalized.toString(16)).slice(-2);
+    })
+    .join('');
+}
+
+function findTallySubmissionIdentifier_(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+
+  const candidateKeys = [
+    'eventId',
+    'event_id',
+    'submissionId',
+    'submission_id',
+    'responseId',
+    'response_id',
+    'respondentId',
+    'respondent_id',
+    'id',
+  ];
+
+  for (let i = 0; i < candidateKeys.length; i += 1) {
+    const value = String(payload[candidateKeys[i]] || '').trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+function shouldSkipDuplicateTallySubmission_(fingerprint, now) {
+  const normalizedFingerprint = String(fingerprint || '').trim();
+
+  if (!normalizedFingerprint) {
+    return false;
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(5000);
+
+  try {
+    const cache = CacheService.getScriptCache();
+    const processedKey = getProcessedTallySubmissionCacheKey_(
+      normalizedFingerprint
+    );
+    const inProgressKey = getInProgressTallySubmissionCacheKey_(
+      normalizedFingerprint
+    );
+    const processed = cache.get(processedKey);
+
+    if (processed) {
+      Logger.log(
+        'shouldSkipDuplicateTallySubmission_: already processed ' +
+          normalizedFingerprint
+      );
+      return true;
+    }
+
+    const inProgress = cache.get(inProgressKey);
+
+    if (inProgress) {
+      Logger.log(
+        'shouldSkipDuplicateTallySubmission_: in progress ' +
+          normalizedFingerprint
+      );
+      return true;
+    }
+
+    cache.put(
+      inProgressKey,
+      JSON.stringify({
+        startedAt: (now || new Date()).toISOString(),
+      }),
+      60 * 20
+    );
+
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function markTallySubmissionProcessed_(fingerprint, options) {
+  const normalizedFingerprint = String(fingerprint || '').trim();
+
+  if (!normalizedFingerprint) {
+    return;
+  }
+
+  const cache = CacheService.getScriptCache();
+  const processedKey = getProcessedTallySubmissionCacheKey_(
+    normalizedFingerprint
+  );
+  const inProgressKey = getInProgressTallySubmissionCacheKey_(
+    normalizedFingerprint
+  );
+  const payload = {
+    processedAt:
+      options?.processedAt instanceof Date
+        ? options.processedAt.toISOString()
+        : new Date().toISOString(),
+    ledgerId: String(options?.ledgerId || '').trim(),
+  };
+
+  cache.put(processedKey, JSON.stringify(payload), 60 * 60 * 6);
+  cache.remove(inProgressKey);
+}
+
+function clearInProgressTallySubmission_(fingerprint) {
+  const normalizedFingerprint = String(fingerprint || '').trim();
+
+  if (!normalizedFingerprint) {
+    return;
+  }
+
+  CacheService.getScriptCache().remove(
+    getInProgressTallySubmissionCacheKey_(normalizedFingerprint)
+  );
+}
+
+function getProcessedTallySubmissionCacheKey_(fingerprint) {
+  return 'tally:processed:' + String(fingerprint || '').trim();
+}
+
+function getInProgressTallySubmissionCacheKey_(fingerprint) {
+  return 'tally:inprogress:' + String(fingerprint || '').trim();
 }
 
 function buildTallyStructuredResult_(answers, parsed) {
