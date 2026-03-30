@@ -103,7 +103,9 @@ function appendLedgerRow_(data) {
   rowObject[COLUMNS.LEDGER.CUSTOMER_NAME] = data.customerName || '';
   rowObject[COLUMNS.LEDGER.CONTACT_NAME] = data.contactName || '';
   rowObject[COLUMNS.LEDGER.EMAIL] = data.email || '';
+  rowObject[COLUMNS.LEDGER.EMAIL_SOURCE] = data.emailSource || '';
   rowObject[COLUMNS.LEDGER.PHONE] = data.phone || '';
+  rowObject[COLUMNS.LEDGER.PHONE_SOURCE] = data.phoneSource || '';
   rowObject[COLUMNS.LEDGER.INQUIRY] = data.inquiry || '';
   rowObject[COLUMNS.LEDGER.DUE_DATE] = data.dueDate || '';
   rowObject[COLUMNS.LEDGER.MATERIAL] = data.material || '';
@@ -139,7 +141,9 @@ function appendImageLedgerRow_(data) {
   rowObject[COLUMNS.IMAGE_LEDGER.CUSTOMER_NAME] = data.customerName || '';
   rowObject[COLUMNS.IMAGE_LEDGER.CONTACT_NAME] = data.contactName || '';
   rowObject[COLUMNS.IMAGE_LEDGER.EMAIL] = data.email || '';
+  rowObject[COLUMNS.IMAGE_LEDGER.EMAIL_SOURCE] = data.emailSource || '';
   rowObject[COLUMNS.IMAGE_LEDGER.PHONE] = data.phone || '';
+  rowObject[COLUMNS.IMAGE_LEDGER.PHONE_SOURCE] = data.phoneSource || '';
   rowObject[COLUMNS.IMAGE_LEDGER.PROJECT_NAME] = data.projectName || '';
   rowObject[COLUMNS.IMAGE_LEDGER.DUE_DATE] = data.dueDate || '';
   rowObject[COLUMNS.IMAGE_LEDGER.MATERIAL] = data.material || '';
@@ -168,7 +172,9 @@ function upsertImageLedgerRow_(data) {
   rowObject[COLUMNS.IMAGE_LEDGER.CUSTOMER_NAME] = data.customerName || '';
   rowObject[COLUMNS.IMAGE_LEDGER.CONTACT_NAME] = data.contactName || '';
   rowObject[COLUMNS.IMAGE_LEDGER.EMAIL] = data.email || '';
+  rowObject[COLUMNS.IMAGE_LEDGER.EMAIL_SOURCE] = data.emailSource || '';
   rowObject[COLUMNS.IMAGE_LEDGER.PHONE] = data.phone || '';
+  rowObject[COLUMNS.IMAGE_LEDGER.PHONE_SOURCE] = data.phoneSource || '';
   rowObject[COLUMNS.IMAGE_LEDGER.PROJECT_NAME] = data.projectName || '';
   rowObject[COLUMNS.IMAGE_LEDGER.DUE_DATE] = data.dueDate || '';
   rowObject[COLUMNS.IMAGE_LEDGER.MATERIAL] = data.material || '';
@@ -389,7 +395,9 @@ function reflectImageLedgerRowToLedger_(imageLedgerRowNumber, ledgerId) {
     customerName: imageLedgerRow[COLUMNS.IMAGE_LEDGER.CUSTOMER_NAME] || '',
     contactName: imageLedgerRow[COLUMNS.IMAGE_LEDGER.CONTACT_NAME] || '',
     email: imageLedgerRow[COLUMNS.IMAGE_LEDGER.EMAIL] || '',
+    emailSource: imageLedgerRow[COLUMNS.IMAGE_LEDGER.EMAIL_SOURCE] || '',
     phone: imageLedgerRow[COLUMNS.IMAGE_LEDGER.PHONE] || '',
+    phoneSource: imageLedgerRow[COLUMNS.IMAGE_LEDGER.PHONE_SOURCE] || '',
     inquiry: imageLedgerRow[COLUMNS.IMAGE_LEDGER.PROJECT_NAME] || '',
     dueDate: imageLedgerRow[COLUMNS.IMAGE_LEDGER.DUE_DATE] || '',
     material: imageLedgerRow[COLUMNS.IMAGE_LEDGER.MATERIAL] || '',
