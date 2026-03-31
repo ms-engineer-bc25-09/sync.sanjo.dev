@@ -306,6 +306,11 @@ function buildTallyNotificationAnswers_(answers, geminiResult) {
 }
 
 function notifyTallyInquiry_(answers) {
+  Logger.log(
+    'notifyTallyInquiry_ config: ' +
+      JSON.stringify(getLineMessagingConfigStatus_())
+  );
+
   if (!LINE_NOTIFY_USER_ID) {
     Logger.log('LINE_NOTIFY_USER_ID 未設定のため通知スキップ');
     return;

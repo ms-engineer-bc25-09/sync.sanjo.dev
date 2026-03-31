@@ -41,7 +41,7 @@ function replyLineMessage_(replyToken, messages) {
   Logger.log('LINE reply response: ' + responseText);
 
   if (statusCode < 200 || statusCode >= 300) {
-    throw new Error('LINE返信エラー: ' + responseText);
+    throw new Error(buildLineApiErrorMessage_('reply', statusCode, responseText));
   }
 }
 
@@ -71,6 +71,13 @@ function pushLineMessage_(toUserId, messages) {
     messages: normalizedMessages,
   };
 
+  Logger.log(
+    'LINE push target: ' +
+      maskLineUserId_(toUserId) +
+      ' messageCount=' +
+      normalizedMessages.length
+  );
+
   const response = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
@@ -88,8 +95,54 @@ function pushLineMessage_(toUserId, messages) {
   Logger.log('LINE push response: ' + responseText);
 
   if (statusCode < 200 || statusCode >= 300) {
-    throw new Error('LINE pushエラー: ' + responseText);
+    throw new Error(buildLineApiErrorMessage_('push', statusCode, responseText));
   }
+}
+
+function getLineMessagingConfigStatus_() {
+  return {
+    hasChannelAccessToken: Boolean(
+      String(LINE_CHANNEL_ACCESS_TOKEN || '').trim()
+    ),
+    hasNotifyUserId: Boolean(String(LINE_NOTIFY_USER_ID || '').trim()),
+    notifyUserId: maskLineUserId_(LINE_NOTIFY_USER_ID),
+  };
+}
+
+function maskLineUserId_(value) {
+  const normalized = String(value || '').trim();
+
+  if (!normalized) {
+    return '(empty)';
+  }
+
+  if (normalized.length <= 8) {
+    return normalized;
+  }
+
+  return normalized.slice(0, 4) + '...' + normalized.slice(-4);
+}
+
+function buildLineApiErrorMessage_(operation, statusCode, responseText) {
+  let detail = String(responseText || '').trim();
+
+  try {
+    const parsed = JSON.parse(responseText);
+    if (parsed && parsed.message) {
+      detail = parsed.message;
+    }
+  } catch (error) {
+    // keep raw response text when JSON parse fails
+  }
+
+  return (
+    'LINE ' +
+    operation +
+    'エラー(status=' +
+    statusCode +
+    '): ' +
+    detail
+  );
 }
 
 function getLineImageContent_(messageId) {
