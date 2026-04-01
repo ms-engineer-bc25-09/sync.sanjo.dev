@@ -300,6 +300,7 @@ function buildTallyImageRawText_(answers, freeText, drawingUrl) {
 
 function buildTallyNotificationAnswers_(answers, geminiResult) {
   return Object.assign({}, answers, {
+    contactName: geminiResult.contact_name || answers.contactName || '',
     inquiry: geminiResult.project_name || answers.inquiry || '',
     dueDate: geminiResult.desired_due_date || answers.dueDate || '',
   });
@@ -438,7 +439,7 @@ function normalizeTallyAnswers_(payload) {
     const value = extractFieldValue_(field);
 
     if (label.includes('会社名')) result.companyName = value;
-    else if (label.includes('ご担当者名') || label.includes('氏名')) {
+    else if (isTallyContactNameLabel_(label)) {
       result.contactName = value;
     } else if (label.includes('メールアドレス')) result.email = value;
     else if (label.includes('電話番号') || label.includes('ご連絡先電話番号')) {
@@ -465,6 +466,21 @@ function normalizeTallyAnswers_(payload) {
   }
 
   return result;
+}
+
+function isTallyContactNameLabel_(label) {
+  const normalizedLabel = String(label || '').trim();
+
+  if (!normalizedLabel) return false;
+  if (normalizedLabel.includes('会社名')) return false;
+
+  return (
+    normalizedLabel.includes('担当者名') ||
+    normalizedLabel.includes('ご担当者名') ||
+    normalizedLabel.includes('担当者') ||
+    normalizedLabel.includes('お名前') ||
+    normalizedLabel.includes('氏名')
+  );
 }
 
 function buildTallySubmissionFingerprint_(options) {
