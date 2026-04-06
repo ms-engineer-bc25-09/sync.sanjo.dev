@@ -233,3 +233,13 @@ docker compose up --build
 docker compose down
 docker compose up --build
 ```
+
+---
+
+## 4. 参考
+
+GAS 側の設定値は Script Properties に設定します。
+
+LINE Messaging API の設定は LINE Developers 側で行います。
+
+詳細な手順は `[gas/README.md](./gas/README.md)` を参照してください。

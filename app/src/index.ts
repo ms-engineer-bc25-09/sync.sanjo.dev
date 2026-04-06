@@ -3,7 +3,7 @@
 // - Expressアプリを作る
 // - JSONを受け取れるようにする
 // - /health を登録する
-// - 3000番ポートで起動する
+// - デフォルトでは3000番ポートで起動する
 
 import express, { Request, Response } from "express";
 import { healthRouter } from "./routes/health.js";
