@@ -161,6 +161,16 @@ limit 5;
 
 `gas/src/richmenu.js` に Messaging API 用のリッチメニュー定義があります。
 
+この実装では、リッチメニュー画像を LINE Developers の画面で手動設定するのではなく、Google Drive 上の画像を GAS から取得して LINE Messaging API へアップロードします。
+
+実務上の利点:
+
+1. 画像ファイルを Google Drive 上で管理できる
+2. `LINE_RICH_MENU_IMAGE_FILE_ID` を差し替えるだけで画像更新ができる
+3. LINE Developers の画面で画像を手動アップロードする運用を減らせる
+4. リッチメニュー作成、画像アップロード、default rich menu 適用をまとめて実行できる
+5. リッチメニュータップ時に不要なメッセージをトーク画面へ表示させずに操作できるため、UX 向上が見込める
+
 使い方:
 
 1. Script Properties に `LINE_RICH_MENU_IMAGE_FILE_ID` を設定
@@ -169,6 +179,18 @@ limit 5;
 4. GAS エディタで `createAndSetDefaultMessagingApiRichMenu_()` を実行
 
 これで Messaging API 側の default rich menu を作成し、画像アップロードと適用まで行います。
+
+Google Drive での準備方法:
+
+1. リッチメニュー画像を Google Drive にアップロードする
+2. Drive のファイル URL から file ID を確認する
+3. その file ID を Script Properties の `LINE_RICH_MENU_IMAGE_FILE_ID` に設定する
+
+補足:
+
+1. 対応画像形式は PNG または JPEG です
+2. 画像は GAS から `DriveApp.getFileById(...)` で取得されます
+3. LINE Developers 画面で画像を手動設定しなくても、この関数実行で反映できます
 
 ## 注意
 
